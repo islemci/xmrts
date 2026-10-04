@@ -109,6 +109,12 @@ ZMQ_MK="$WORK/contrib/depends/packages/zeromq.mk"
 perl -pi -e 's/^(\$\(package\)_version=).*$/\1$ENV{ZMQ_VERSION}/' "$ZMQ_MK"
 perl -pi -e 's/^(\$\(package\)_sha256_hash=).*$/\1$ENV{ZMQ_SHA256}/' "$ZMQ_MK"
 grep -E "\(package\)_(version|sha256_hash)=" "$ZMQ_MK"
+# The 0.18.5 zeromq backport (clock.cpp unused-variable, 2021) is already
+# upstream in 4.3.5, so its slot gets our own one-liner instead:
+# proxy.cpp `{0}` trips -Werror=missing-braces on modern Clang, `{}` is
+# the upstream-blessed spelling. Same filename => zero .mk edits.
+cp "$SCRIPT_DIR/../patches/zeromq-4.3.5-missing-braces.patch" \
+  "$WORK/contrib/depends/patches/zeromq/06aba27b04c5822cb88a69677382a0f053367143.patch"
 
 if [ "$MODE" = "static" ]; then
   NPROC="$(nproc 2>/dev/null || sysctl -n hw.ncpu)"

@@ -93,7 +93,10 @@ perl -pi -e 's/^\$\(package\)_cxxflags=-std=c\+\+11$/\$(package)_cxxflags=-std=c
 # nor are needed on 1.84+, so empty the list and neutralize the
 # hardcoded invocations. Verified against upstream's own removal.
 perl -pi -e 's/^\$\(package\)_patches=.*$/\$(package)_patches=/' "$BOOST_MK"
-perl -0777 -pi -e 's/^  patch -p1 < .*fix_ar(options|m_arch)\.patch &&\\\n/  true \&\&\n/gm' "$BOOST_MK"
+# NB: the replacement keeps the trailing `&&\` continuations: without
+# them the three lines stop forming one logical recipe line and make
+# dies with "missing separator" at funcs.mk eval time.
+perl -0777 -pi -e 's/^  patch -p1 < .*fix_ar(options|m_arch)\.patch &&\\\n/  true \&\&\\\n/gm' "$BOOST_MK"
 grep -E "\(package\)_(version|sha256_hash|patches)=|\(package\)_cxxflags=-std" "$BOOST_MK"
 
 if [ "$MODE" = "static" ]; then

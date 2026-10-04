@@ -99,6 +99,17 @@ perl -pi -e 's/^\$\(package\)_patches=.*$/\$(package)_patches=/' "$BOOST_MK"
 perl -0777 -pi -e 's/^  patch -p1 < .*fix_ar(options|m_arch)\.patch &&\\\n/  true \&\&\\\n/gm' "$BOOST_MK"
 grep -E "\(package\)_(version|sha256_hash|patches)=|\(package\)_cxxflags=-std" "$BOOST_MK"
 
+# ZeroMQ: 4.3.4 trips -Werror on sprintf deprecation under the Xcode
+# 15.4+ SDK; 4.3.5 is the upstream fix (same layout/scheme, and the
+# version current master pins). Asset lives under
+# github.com/zeromq/libzmq/releases/download/v<VERSION>/.
+export ZMQ_VERSION="4.3.5"
+export ZMQ_SHA256="6653ef5910f17954861fe72332e68b03ca6e4d9c7160eb3a8de5a5a913bfab43"
+ZMQ_MK="$WORK/contrib/depends/packages/zeromq.mk"
+perl -pi -e 's/^(\$\(package\)_version=).*$/\1$ENV{ZMQ_VERSION}/' "$ZMQ_MK"
+perl -pi -e 's/^(\$\(package\)_sha256_hash=).*$/\1$ENV{ZMQ_SHA256}/' "$ZMQ_MK"
+grep -E "\(package\)_(version|sha256_hash)=" "$ZMQ_MK"
+
 if [ "$MODE" = "static" ]; then
   NPROC="$(nproc 2>/dev/null || sysctl -n hw.ncpu)"
   TOOLCHAIN="$WORK/contrib/depends/$TRIPLE/share/toolchain.cmake"
@@ -120,9 +131,18 @@ else
 fi
 
 NPROC="$(nproc 2>/dev/null || sysctl -n hw.ncpu)"
-# 8 GB-class machines OOM on full parallelism for the heaviest TUs.
-if [ "$NPROC" -gt 6 ]; then NPROC=6; fi
-cmake --build "$WORK/build/release" --target wallet_rpc_server -j"$NPROC"
+# Parallelism: roughly one heavy TU per 2 GB RAM, capped by cores.
+# (8 GB laptop -> 4-6 jobs as before; 32 GB CI runner -> full cores.)
+if command -v free >/dev/null 2>&1; then
+  MEMGB="$(awk '/MemTotal/ {print int($2/1024/1024)}' /proc/meminfo)"
+else
+  MEMGB="$(sysctl -n hw.memsize 2>/dev/null | awk '{print int($1/1024/1024/1024)}')"
+fi
+MEMGB="${MEMGB:-8}"
+JOBS="${JOBS:-$NPROC}"
+[ "$JOBS" -gt "$((MEMGB / 2))" ] && JOBS="$((MEMGB / 2))"
+[ "$JOBS" -lt 2 ] && JOBS=2
+cmake --build "$WORK/build/release" --target wallet_rpc_server -j"$JOBS"
 
 BIN="$WORK/build/release/bin/monero-wallet-rpc"
 "$BIN" --version

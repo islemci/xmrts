@@ -28,12 +28,15 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - runner: macos-14
-            target: aarch64-apple-darwin
-            archive: xmrts-macos-arm64
-          - runner: ubuntu-22.04
+          # Blacksmith runners (faster + cheaper than GitHub-hosted; needs
+          # the Blacksmith GitHub App installed or jobs queue forever).
+          # 8 vCPU/32 GB Linux, 6 vCPU/24 GB macOS arm64.
+          - runner: blacksmith-8vcpu-ubuntu-2204
             target: x86_64-linux-gnu
             archive: xmrts-linux-x86_64
+          - runner: blacksmith-6vcpu-macos-15
+            target: aarch64-apple-darwin
+            archive: xmrts-macos-arm64
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4

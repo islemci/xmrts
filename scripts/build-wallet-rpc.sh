@@ -68,6 +68,23 @@ else
 fi
 git -C "$WORK" diff --stat
 
+# Boost: 1.69 (pinned by this Monero tag) predates current
+# toolchains — its build passes the dead GCC-only flag
+# -fcoalesce-templates (hard error on modern Clang, 116 dead targets)
+# and its locale/thread sources fail on GCC 11. Bump to 1.84.0 within
+# the same packaging scheme (classic boost_X_Y_Z layout, identical .mk
+# mechanics). Boost >= 1.84 requires C++14+, so raise depends cxxflags
+# to the C++17 Monero itself builds with. Override via env to test
+# other versions. (perl, not sed -i: portable across GNU/BSD.)
+BOOST_VERSION="${BOOST_VERSION:-1.84.0}"
+# Official hash per https://www.boost.org/users/history/version_1_84_0.html
+BOOST_SHA256="${BOOST_SHA256:-a5800f405508f5df8114558ca9855d2640a2de8f0445f051fa1c7c3383045724}"
+BOOST_MK="$WORK/contrib/depends/packages/boost.mk"
+perl -pi -e 's/^\$\(package\)_version=.*$/\$(package)_version='"$BOOST_VERSION"'/' "$BOOST_MK"
+perl -pi -e 's/^\$\(package\)_sha256_hash=.*$/\$(package)_sha256_hash='"$BOOST_SHA256"'/' "$BOOST_MK"
+perl -pi -e 's/^\$\(package\)_cxxflags=-std=c\+\+11$/\$(package)_cxxflags=-std=c++17/' "$BOOST_MK"
+grep -E "\(package\)_(version|sha256_hash)=|\(package\)_cxxflags=-std" "$BOOST_MK"
+
 if [ "$MODE" = "static" ]; then
   NPROC="$(nproc 2>/dev/null || sysctl -n hw.ncpu)"
   TOOLCHAIN="$WORK/contrib/depends/$TRIPLE/share/toolchain.cmake"

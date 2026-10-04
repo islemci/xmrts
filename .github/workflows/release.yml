@@ -1,0 +1,150 @@
+# xmrts releases: build the CLI + the patched wallet sidecar per platform,
+# bundle them with checksums, and attach to the GitHub release.
+#
+# Trigger: push a tag like v0.1.0.
+# Platforms (v1): macOS arm64, Linux x86_64. Windows/macOS-Intel are TODOs:
+# the depends triple + runner exist, they just haven't been exercised.
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+# Needed to attach assets to the release.
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-14
+            target: aarch64-apple-darwin
+            archive: xmrts-macos-arm64
+          - runner: ubuntu-22.04
+            target: x86_64-linux-gnu
+            archive: xmrts-linux-x86_64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: System deps (macOS)
+        if: startsWith(matrix.runner, 'macos')
+        run: brew install cmake autoconf automake libtool pkg-config ccache
+
+      - name: System deps (Linux)
+        if: startsWith(matrix.runner, 'ubuntu')
+        run: >
+          sudo apt-get update &&
+          sudo apt-get install -y build-essential cmake pkg-config
+          autoconf automake libtool curl git python3 ccache
+
+      - name: Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      # The patch never touches dependencies, so a cached depends prefix
+      # stays valid across releases (keyed by tag+platform). ccache covers
+      # the Monero objects themselves. Together: first release is slow
+      # (hours), subsequent ones rebuild only what changed (minutes).
+      - name: Cache depends prefix
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/monero-build/contrib/depends/${{ matrix.target }}
+          key: depends-${{ matrix.target }}-v0.18.5.0
+
+      - name: Cache ccache
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/ccache
+          key: ccache-${{ matrix.target }}-${{ github.sha }}
+          restore-keys: ccache-${{ matrix.target }}-
+
+      # Pinned Monero tag + xmrts patch -> static wallet binary.
+      # Bump MONERO_TAG + PATCH together when moving to a new Monero release
+      # (the patch is version-specific; see patches/). Also bump the
+      # depends cache key above to match the new tag.
+      - name: Build patched monero-wallet-rpc (static)
+        env:
+          MONERO_TAG: v0.18.5.0
+          MONERO_PATCH: patches/monero-wallet-rpc-extra-v0.18.5.0.patch
+          CCACHE_DIR: ${{ runner.temp }}/ccache
+        run: |
+          MODE=static ./scripts/build-wallet-rpc.sh \
+            "$MONERO_TAG" "$MONERO_PATCH" "$RUNNER_TEMP/monero-build"
+          cp "$RUNNER_TEMP/monero-build/build/release/bin/monero-wallet-rpc" .
+
+      - name: Build xmrts (release)
+        run: |
+          cargo build --release
+          cp target/release/xmrts .
+
+      - name: Bundle + checksums
+        run: |
+          strip xmrts monero-wallet-rpc || true
+          shasum -a 256 xmrts monero-wallet-rpc > SHA256SUMS
+          cat SHA256SUMS
+          mkdir -p dist
+          tar -czf "dist/${{ matrix.archive }}.tar.gz" \
+            xmrts monero-wallet-rpc SHA256SUMS
+          (cd dist && shasum -a 256 "${{ matrix.archive }}.tar.gz" \
+            > "TARBALL-SHA-${{ matrix.archive }}")
+
+      - name: Upload tarball checksum (for tap bump)
+        uses: actions/upload-artifact@v4
+        with:
+          name: tarball-sha-${{ matrix.archive }}
+          path: dist/TARBALL-SHA-${{ matrix.archive }}
+
+      - name: Attach to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.tar.gz
+          generate_release_notes: true
+
+  # Keep the Homebrew tap in lockstep with the release: regenerate
+  # Formula/xmrts.rb from the published tarball checksums and push.
+  # Requires: an empty `homebrew-xmrts` repo + a fine-grained PAT with
+  # contents:write on it, stored as the TAP_TOKEN secret here.
+  bump-tap:
+    needs: build
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Collect tarball checksums
+        uses: actions/download-artifact@v4
+        with:
+          pattern: tarball-sha-*
+          merge-multiple: true
+          path: tap-shas
+
+      - name: Checkout tap
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/homebrew-xmrts
+          token: ${{ secrets.TAP_TOKEN }}
+          path: tap
+
+      - name: Regenerate formula + push
+        run: |
+          args=(--formula tap/Formula/xmrts.rb)
+          args+=(--owner "${{ github.repository_owner }}" --repo xmrts)
+          args+=(--version "${GITHUB_REF_NAME#v}")
+          for f in tap-shas/TARBALL-SHA-*; do
+            archive="$(basename "$f" | sed 's/^TARBALL-SHA-//')"
+            sha="$(cut -d' ' -f1 "$f")"
+            args+=(--tarball "$archive=$sha")
+          done
+          mkdir -p tap/Formula
+          python3 scripts/bump-tap-formula.py "${args[@]}"
+          cd tap
+          git config user.name "xmrts-release"
+          git config user.email "xmrts-release@users.noreply.github.com"
+          git add Formula/xmrts.rb
+          git diff --cached --quiet && echo "formula unchanged" || {
+            git commit -m "xmrts ${GITHUB_REF_NAME}"
+            git push
+          }

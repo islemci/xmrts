@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "hash_algo": "SHA-256 (0x01)",
+  "merkle_ver": "MERKLE_V1 (0x01)",
+  "file_hashes": {
+    "empty": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "abc": "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+    "hello_xmrts": "99b3ec575ec5aedf2b205bcd83cc05b5d092e5a781c0e1abdb7067d8b673aef6"
+  },
+  "leaves": {
+    "empty": "4e59bf27372b1304bc0b137d1be9d566ad58b154b6a6b5778af7f414b1d4b84c"
+  },
+  "trees": {
+    "one_leaf_empty": {
+      "sorted": ["e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"],
+      "root": "4e59bf27372b1304bc0b137d1be9d566ad58b154b6a6b5778af7f414b1d4b84c",
+      "path_len": 0
+    },
+    "two_leaf_empty_abc": {
+      "sorted": [
+        "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      ],
+      "root": "fb12d6ae208106a73219c7c61bcebf429a6d9ae5c1dc35159a205814458234c5",
+      "path_len": 1
+    },
+    "three_leaf": {
+      "sorted": [
+        "99b3ec575ec5aedf2b205bcd83cc05b5d092e5a781c0e1abdb7067d8b673aef6",
+        "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      ],
+      "root": "6a1586e9c1be9e05ec67443d4a8eff58435c5aca55debd1535b3cb391f988d5c",
+      "path_len": 2
+    }
+  },
+  "commitment": {
+    "root": "fb12d6ae208106a73219c7c61bcebf429a6d9ae5c1dc35159a205814458234c5",
+    "extra_hex": "0228584d525453010101fb12d6ae208106a73219c7c61bcebf429a6d9ae5c1dc35159a205814458234c5"
+  }
+}

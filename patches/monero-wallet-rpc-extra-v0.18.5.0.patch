@@ -1,0 +1,70 @@
+diff --git a/src/wallet/wallet_rpc_server.cpp b/src/wallet/wallet_rpc_server.cpp
+index da0a0a1..147661e 100644
+--- a/src/wallet/wallet_rpc_server.cpp
++++ b/src/wallet/wallet_rpc_server.cpp
+@@ -1259,6 +1259,27 @@ namespace tools
+       return false;
+     }
+ 
++    // xmrts: append caller-supplied arbitrary tx_extra bytes (timestamp commitment).
++    // Unknown request keys are ignored by epee, so `extra` is strictly opt-in.
++    if (!req.extra.empty())
++    {
++      std::string extra_bytes;
++      if (!epee::string_tools::parse_hexstr_to_binbuff(req.extra, extra_bytes))
++      {
++        er.code = WALLET_RPC_ERROR_CODE_WRONG_EXTRA;
++        er.message = "extra: not valid hex";
++        return false;
++      }
++      // Same relay ceiling the txpool enforces on tx_extra.
++      if (extra.size() + extra_bytes.size() > 1060)
++      {
++        er.code = WALLET_RPC_ERROR_CODE_WRONG_EXTRA;
++        er.message = "extra: tx_extra would exceed relay limit";
++        return false;
++      }
++      extra.insert(extra.end(), extra_bytes.begin(), extra_bytes.end());
++    }
++
+     try
+     {
+       uint64_t mixin = m_wallet->adjust_mixin(req.ring_size ? req.ring_size - 1 : 0);
+diff --git a/src/wallet/wallet_rpc_server_commands_defs.h b/src/wallet/wallet_rpc_server_commands_defs.h
+index 26a1e2a..258af37 100644
+--- a/src/wallet/wallet_rpc_server_commands_defs.h
++++ b/src/wallet/wallet_rpc_server_commands_defs.h
+@@ -47,7 +47,7 @@
+ // advance which version they will stop working with
+ // Don't go over 32767 for any of these
+ #define WALLET_RPC_VERSION_MAJOR 1
+-#define WALLET_RPC_VERSION_MINOR 30
++#define WALLET_RPC_VERSION_MINOR 31
+ #define MAKE_WALLET_RPC_VERSION(major,minor) (((major)<<16)|(minor))
+ #define WALLET_RPC_VERSION MAKE_WALLET_RPC_VERSION(WALLET_RPC_VERSION_MAJOR, WALLET_RPC_VERSION_MINOR)
+ namespace tools
+@@ -609,6 +609,7 @@ namespace wallet_rpc
+       bool do_not_relay;
+       bool get_tx_hex;
+       bool get_tx_metadata;
++      std::string extra; // optional arbitrary tx_extra bytes as hex (xmrts: timestamp commitment)
+ 
+       BEGIN_KV_SERIALIZE_MAP()
+         KV_SERIALIZE(destinations)
+@@ -623,6 +624,7 @@ namespace wallet_rpc
+         KV_SERIALIZE_OPT(do_not_relay, false)
+         KV_SERIALIZE_OPT(get_tx_hex, false)
+         KV_SERIALIZE_OPT(get_tx_metadata, false)
++        KV_SERIALIZE_OPT(extra, std::string())
+       END_KV_SERIALIZE_MAP()
+     };
+     typedef epee::misc_utils::struct_init<request_t> request;
+diff --git a/src/wallet/wallet_rpc_server_error_codes.h b/src/wallet/wallet_rpc_server_error_codes.h
+index 4756c19..d83bf7a 100644
+--- a/src/wallet/wallet_rpc_server_error_codes.h
++++ b/src/wallet/wallet_rpc_server_error_codes.h
+@@ -83,3 +83,4 @@
+ #define WALLET_RPC_ERROR_CODE_NONZERO_UNLOCK_TIME    -50
+ #define WALLET_RPC_ERROR_CODE_IS_BACKGROUND_WALLET   -51
+ #define WALLET_RPC_ERROR_CODE_IS_BACKGROUND_SYNCING  -52
++#define WALLET_RPC_ERROR_CODE_WRONG_EXTRA            -53

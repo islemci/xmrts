@@ -1,0 +1,21 @@
+# Rust build output
+/target/
+
+# Release bundles (rebuilt per release; see README packaging section)
+/dist/
+
+# Timestamp proofs produced by local runs — artifacts, not sources
+*.xmrts
+
+# macOS
+.DS_Store
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*~
+
+# Patch/diff leftovers
+*.orig
+*.rej

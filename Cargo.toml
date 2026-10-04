@@ -1,0 +1,37 @@
+[package]
+name = "xmrts"
+version = "0.1.0"
+edition = "2021"
+description = "Decentralized file timestamping tool built on Monero"
+license = "MIT"
+repository = "https://github.com/islemci/xmrts"
+keywords = ["monero", "timestamping", "merkle", "cli"]
+categories = ["command-line-utilities", "cryptography"]
+
+[[bin]]
+name = "xmrts"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+hex = "0.4"
+md5 = "0.7"
+reqwest = { version = "0.12", features = ["json", "rustls-tls"] }
+tokio = { version = "1", features = ["full"] }
+thiserror = "2"
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+directories = "6"
+toml = "0.8"
+sysinfo = "0.32"
+rpassword = "7"
+zeroize = "1"
+indicatif = "0.17"
+console = "0.15"
+
+[dev-dependencies]
+tempfile = "3"

@@ -10,7 +10,7 @@ async fn main() -> Result<()> {
         .with_env_filter(EnvFilter::from_default_env())
         .init();
     let cli = Cli::parse();
-    match &cli.command {
+    let result = match &cli.command {
         Command::Init(args) => xmrts::cli::init::run(args),
         Command::Connect(args) => xmrts::cli::connect::run(args, cli.verbose, cli.stagenet).await,
         Command::Stamp(args) => xmrts::cli::stamp::run(args, cli.verbose, cli.stagenet).await,
@@ -19,5 +19,12 @@ async fn main() -> Result<()> {
         Command::Finalize(args) => xmrts::cli::finalize::run(args, cli.verbose, cli.stagenet).await,
         Command::Wallet(args) => xmrts::cli::wallet::run(args, cli.verbose).await,
         Command::Setting(args) => xmrts::cli::setting::run(args),
+    };
+    // Every failure ends with the red cross (suppressed in --json mode,
+    // where commands already printed a JSON error document).
+    if let Err(e) = result {
+        xmrts::cli::ui::fail(&format!("{e:#}"));
+        std::process::exit(1);
     }
+    Ok(())
 }

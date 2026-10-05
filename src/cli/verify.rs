@@ -93,15 +93,28 @@ pub async fn run(args: &VerifyArgs, verbose: bool, stagenet: bool) -> Result<()>
     let checked = blockchain_check(&proof, args.daemon.as_deref(), stagenet).await;
     super::ui::abandon(&bar);
     match checked {
-        Ok((height, txid_hex)) => {
+        Ok(anchor) => {
             super::ui::ok("Mark found on chain.");
             super::ui::ok("Tx is confirmed.");
+            if anchor.confirmations < crate::wallet::daemon::MIN_CONFIRMATIONS {
+                super::ui::warn(&format!(
+                    "Only {} confirmation(s); want {}+. Reorg risk: wait before relying on this.",
+                    anchor.confirmations,
+                    crate::wallet::daemon::MIN_CONFIRMATIONS
+                ));
+            }
+            if proof.network != crate::protocol::proof::Network::Mainnet {
+                super::ui::warn(
+                    "NON-MAINNET proof: testnet/stagenet marks have no security value.",
+                );
+            }
             super::ui::ok("Time is proven.");
             println!();
-            super::ui::field("Block", &height.to_string());
-            super::ui::field("Transaction", &txid_hex);
+            super::ui::field("Block", &anchor.height.to_string());
+            super::ui::field("Transaction", &hex::encode(proof.txid));
+            super::ui::field("Confirmations", &anchor.confirmations.to_string());
             println!();
-            println!("This file lived no later than block {height}.");
+            println!("This file lived no later than block {}.", anchor.height);
         }
         Err(e) => {
             let _ = ok;
@@ -124,7 +137,7 @@ async fn blockchain_check(
     proof: &Proof,
     daemon_override: Option<&str>,
     stagenet: bool,
-) -> Result<(u64, String)> {
+) -> Result<crate::wallet::daemon::AnchorCheck> {
     let cfg = connection::load_config();
     let effective_net = if stagenet {
         "stagenet".to_string()
@@ -137,6 +150,13 @@ async fn blockchain_check(
             proof.network.as_str()
         );
     }
+    // Anchored proofs must carry the real block hash (H1). Zeros mean the
+    // proof was written before the hash was fetched: fail, do not verify.
+    if proof.block_hash == [0u8; 32] {
+        anyhow::bail!(
+            "Proof has no block hash (all zeros). It was never properly anchored.\nRun `xmrts finalize` to fetch the real hash."
+        );
+    }
 
     let txid_hex = hex::encode(proof.txid);
     let daemon = daemon_override
@@ -147,28 +167,22 @@ async fn blockchain_check(
             "No daemon set so chain bytes stay unchecked.\nSet one with `xmrts connect --daemon http://127.0.0.1:18081`. Any local or remote node fits. Or pass --offline for crypto only."
         );
     };
-    let height = crate::wallet::daemon::confirm_commitment(&daemon, &txid_hex, &proof.root)
-        .await
-        .map_err(|e| match e {
-            crate::wallet::daemon::DaemonError::CommitmentAbsent { .. } => anyhow::anyhow!(
-                "Tx {txid_hex} holds no mark for this file.\nIt lives but it does not anchor you. The wallet may have dropped the mark."
-            ),
-            other => anyhow::anyhow!("{other}"),
-        })?;
-    let client = cfg.client();
-    if let Ok(v) = crate::wallet::rpc::get_transfer_by_txid(&client, &txid_hex).await {
-        let wh = v
-            .get("transfer")
-            .and_then(|t| t.get("height"))
-            .or_else(|| v.get("height"))
-            .and_then(|h| h.as_u64())
-            .unwrap_or(0);
-        if wh > 0 && proof.block_height != 0 && wh != proof.block_height {
-            anyhow::bail!(
-                "Wallet says block {wh} but proof says {}. Stopping on split anchors.",
-                proof.block_height
-            );
-        }
-    }
-    Ok((height.max(proof.block_height), txid_hex))
+    // Full anchor check: commitment + exact height + block-hash match +
+    // daemon nettype match (H1+M1). No wallet involved (M2): verification
+    // depends only on the proof file, the original file, and daemon(s).
+    crate::wallet::daemon::verify_anchor(
+        &daemon,
+        &txid_hex,
+        &proof.root,
+        proof.block_height,
+        &proof.block_hash,
+        proof.network.as_str(),
+    )
+    .await
+    .map_err(|e| match e {
+        crate::wallet::daemon::DaemonError::CommitmentAbsent { .. } => anyhow::anyhow!(
+            "Tx {txid_hex} holds no mark for this file.\nIt lives but it does not anchor you. The wallet may have dropped the mark."
+        ),
+        other => anyhow::anyhow!("{other}"),
+    })
 }

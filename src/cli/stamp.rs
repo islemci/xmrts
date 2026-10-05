@@ -250,22 +250,64 @@ pub async fn run(args: &StampArgs, verbose: bool, stagenet: bool) -> Result<()> 
         }
     };
 
-    let height = if height > 0 {
+    // H1+H2+H3: the wallet's word is not enough. Re-check the mark on the
+    // daemon, fetch the REAL block hash (never zeros), require exact height
+    // match and MIN_CONFIRMATIONS depth. Anything short stays pending.
+    let (height, block_hash) = if height > 0 {
         let daemon = args.daemon.clone().or(cfg.daemon_endpoint.clone());
         match daemon {
             Some(d) => {
                 let bar = super::ui::spinner("Checking chain...");
-                let checked = crate::wallet::daemon::confirm_commitment(&d, &tx_hash, &root).await;
+                let chain_height =
+                    crate::wallet::daemon::confirm_commitment(&d, &tx_hash, &root).await;
                 super::ui::abandon(&bar);
-                match checked {
+                match chain_height {
                     Ok(chain_height) => {
-                        super::ui::ok("Chain holds your mark.");
-                        chain_height.max(height)
+                        if chain_height != height {
+                            super::ui::warn(&format!(
+                                "Wallet says block {height} but chain says {chain_height}. Proofs stay pending."
+                            ));
+                            (0u64, [0u8; 32])
+                        } else {
+                            match crate::wallet::daemon::block_hash(&d, chain_height).await {
+                                Ok(bh) => {
+                                    // H3: depth gate.
+                                    let depth = match crate::wallet::daemon::get_info(&d).await {
+                                        Ok((_, tip)) => {
+                                            tip.saturating_sub(chain_height).saturating_add(1)
+                                        }
+                                        Err(_) => 1,
+                                    };
+                                    if depth < crate::wallet::daemon::MIN_CONFIRMATIONS {
+                                        super::ui::note(&format!(
+                                            "Only {depth} confirmation(s); want {}+. Proofs stay pending until deep enough.",
+                                            crate::wallet::daemon::MIN_CONFIRMATIONS
+                                        ));
+                                        super::ui::hint(
+                                            "Run `xmrts finalize` once it buries deeper.",
+                                        );
+                                        (0u64, [0u8; 32])
+                                    } else {
+                                        super::ui::ok("Chain holds your mark.");
+                                        (chain_height, bh)
+                                    }
+                                }
+                                Err(e) => {
+                                    super::ui::warn(&format!(
+                                        "Block hash missed ({e}). Proofs stay pending."
+                                    ));
+                                    super::ui::hint(
+                                        "Run `xmrts finalize` once the daemon answers.",
+                                    );
+                                    (0u64, [0u8; 32])
+                                }
+                            }
+                        }
                     }
                     Err(e) => {
                         super::ui::warn(&format!("Tx is in but mark is missing: {e}"));
                         super::ui::hint("Proofs stay pending. Nothing anchored yet.");
-                        0u64
+                        (0u64, [0u8; 32])
                     }
                 }
             }
@@ -274,11 +316,11 @@ pub async fn run(args: &StampArgs, verbose: bool, stagenet: bool) -> Result<()> 
                 super::ui::hint(
                     "Set one with `xmrts connect --daemon <url>`. Proofs stay pending.",
                 );
-                0u64
+                (0u64, [0u8; 32])
             }
         }
     } else {
-        0u64
+        (0u64, block_hash)
     };
 
     write_proofs(

@@ -67,13 +67,21 @@ pub async fn run(args: &FinalizeArgs, verbose: bool, stagenet: bool) -> Result<(
     let height = height.map_err(|e| anyhow::anyhow!("Not ready yet: {e}"))?;
     super::ui::ok(&format!("Tx {} sits in block {height}.", op.txid));
     super::ui::ok("Chain holds your mark.");
-    let block_hash = match crate::wallet::daemon::block_hash(&daemon, height).await {
-        Ok(h) => h,
-        Err(e) => {
-            super::ui::warn(&format!("Block hash missed ({e}). Proofs carry zeros"));
-            [0u8; 32]
-        }
-    };
+    // H2: never write zeros. If the hash cannot be fetched, stay pending.
+    let block_hash = crate::wallet::daemon::block_hash(&daemon, height)
+        .await
+        .map_err(|e| anyhow::anyhow!("Block hash missed ({e}). Staying pending; retry later"))?;
+    // H3: depth gate — only anchor when buried deep enough.
+    let (_, tip) = crate::wallet::daemon::get_info(&daemon)
+        .await
+        .map_err(|e| anyhow::anyhow!("Chain tip unknown ({e}). Staying pending; retry later"))?;
+    let confirmations = tip.saturating_sub(height).saturating_add(1);
+    if confirmations < crate::wallet::daemon::MIN_CONFIRMATIONS {
+        anyhow::bail!(
+            "Only {confirmations} confirmation(s); want {}+. Staying pending; run `xmrts finalize` later",
+            crate::wallet::daemon::MIN_CONFIRMATIONS
+        );
+    }
 
     let mut pairs: Vec<([u8; 32], PathBuf)> = Vec::new();
     for f in &op.files {

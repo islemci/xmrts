@@ -256,8 +256,10 @@ pub async fn run(args: &StampArgs, verbose: bool, stagenet: bool) -> Result<()> 
         super::ui::note("Skipping wait. Proofs stay pending.");
         (0u64, [0u8; 32])
     } else {
+        super::ui::note("Blocks average ~2 min; waiting up to ~10 min. Pending is normal.");
+        super::ui::hint("Safe to Ctrl-C any time: `xmrts finalize` finishes later.");
         let bar = super::ui::spinner("Waiting for block...");
-        let found = wait_for_confirmation(&client, &tx_hash).await;
+        let found = wait_for_confirmation(&client, &tx_hash, &bar).await;
         super::ui::abandon(&bar);
         match found {
             Some((h, bh)) => {
@@ -265,7 +267,7 @@ pub async fn run(args: &StampArgs, verbose: bool, stagenet: bool) -> Result<()> 
                 (h, bh)
             }
             None => {
-                super::ui::note("No block yet. Proofs stay pending.");
+                super::ui::note("No block yet (normal for slow blocks). Proofs stay pending.");
                 super::ui::hint("Run `xmrts finalize` once it confirms.");
                 (0u64, [0u8; 32])
             }
@@ -276,74 +278,80 @@ pub async fn run(args: &StampArgs, verbose: bool, stagenet: bool) -> Result<()> 
     // daemon, fetch the REAL block hash (never zeros), require exact height
     // match and MIN_CONFIRMATIONS depth. Anything short stays pending.
     let (height, block_hash) = if height > 0 {
-        let daemon = args.daemon.clone().or(cfg.daemon_endpoint.clone());
-        match daemon {
-            Some(d) => {
-                let bar = super::ui::spinner("Checking chain...");
-                let chain_height = crate::wallet::daemon::confirm_commitment_for_version(
-                    &d,
-                    &tx_hash,
-                    &commitment,
-                    Some(crate::protocol::merkle::MERKLE_V2),
-                )
-                .await;
-                super::ui::abandon(&bar);
-                match chain_height {
-                    Ok(chain_height) => {
-                        if chain_height != height {
-                            super::ui::warn(&format!(
-                                "Wallet says block {height} but chain says {chain_height}. Proofs stay pending."
-                            ));
-                            (0u64, [0u8; 32])
-                        } else {
-                            match crate::wallet::daemon::block_hash(&d, chain_height).await {
-                                Ok(bh) => {
-                                    // H3: depth gate.
-                                    let depth = match crate::wallet::daemon::get_info(&d).await {
-                                        Ok((_, tip)) => {
-                                            tip.saturating_sub(chain_height).saturating_add(1)
-                                        }
-                                        Err(_) => 1,
-                                    };
-                                    if depth < crate::wallet::daemon::MIN_CONFIRMATIONS {
-                                        super::ui::note(&format!(
-                                            "Only {depth} confirmation(s); want {}+. Proofs stay pending until deep enough.",
-                                            crate::wallet::daemon::MIN_CONFIRMATIONS
-                                        ));
-                                        super::ui::hint(
-                                            "Run `xmrts finalize` once it buries deeper.",
-                                        );
-                                        (0u64, [0u8; 32])
-                                    } else {
-                                        super::ui::ok("Chain holds your mark.");
-                                        (chain_height, bh)
+        // M5: never go pending just because no daemon was configured. Fall
+        // back to the default local daemon for this read-only recheck.
+        let (daemon, is_default) = match args.daemon.clone().or(cfg.daemon_endpoint.clone()) {
+            Some(d) => (d, false),
+            None => {
+                super::ui::note(
+                    "No daemon configured. Trying the default local node http://127.0.0.1:18081.",
+                );
+                ("http://127.0.0.1:18081".to_string(), true)
+            }
+        };
+        {
+            let d = daemon;
+            let bar = super::ui::spinner("Checking chain...");
+            let chain_height = crate::wallet::daemon::confirm_commitment_for_version(
+                &d,
+                &tx_hash,
+                &commitment,
+                Some(crate::protocol::merkle::MERKLE_V2),
+            )
+            .await;
+            super::ui::abandon(&bar);
+            match chain_height {
+                Ok(chain_height) => {
+                    if chain_height != height {
+                        super::ui::warn(&format!(
+                            "Wallet says block {height} but chain says {chain_height}. Proofs stay pending."
+                        ));
+                        (0u64, [0u8; 32])
+                    } else {
+                        match crate::wallet::daemon::block_hash(&d, chain_height).await {
+                            Ok(bh) => {
+                                // H3: depth gate.
+                                let depth = match crate::wallet::daemon::get_info(&d).await {
+                                    Ok((_, tip)) => {
+                                        tip.saturating_sub(chain_height).saturating_add(1)
                                     }
-                                }
-                                Err(e) => {
-                                    super::ui::warn(&format!(
-                                        "Block hash missed ({e}). Proofs stay pending."
+                                    Err(_) => 1,
+                                };
+                                if depth < crate::wallet::daemon::MIN_CONFIRMATIONS {
+                                    super::ui::note(&format!(
+                                        "Only {depth} confirmation(s); want {}+. Proofs stay pending until deep enough.",
+                                        crate::wallet::daemon::MIN_CONFIRMATIONS
                                     ));
-                                    super::ui::hint(
-                                        "Run `xmrts finalize` once the daemon answers.",
-                                    );
+                                    super::ui::hint("Run `xmrts finalize` once it buries deeper.");
                                     (0u64, [0u8; 32])
+                                } else {
+                                    super::ui::ok("Chain holds your mark.");
+                                    (chain_height, bh)
                                 }
+                            }
+                            Err(e) => {
+                                super::ui::warn(&format!(
+                                    "Block hash missed ({e}). Proofs stay pending."
+                                ));
+                                super::ui::hint("Run `xmrts finalize` once the daemon answers.");
+                                (0u64, [0u8; 32])
                             }
                         }
                     }
-                    Err(e) => {
-                        super::ui::warn(&format!("Tx is in but mark is missing: {e}"));
-                        super::ui::hint("Proofs stay pending. Nothing anchored yet.");
-                        (0u64, [0u8; 32])
-                    }
                 }
-            }
-            None => {
-                super::ui::warn("No daemon set. Chain mark not rechecked.");
-                super::ui::hint(
-                    "Set one with `xmrts connect --daemon <url>`. Proofs stay pending.",
-                );
-                (0u64, [0u8; 32])
+                Err(e) => {
+                    if is_default {
+                        super::ui::warn(&format!(
+                            "Default local daemon did not confirm ({e}). Proofs stay pending."
+                        ));
+                    } else {
+                        super::ui::warn(&format!("Tx is in but mark is missing: {e}"));
+                    }
+                    super::ui::hint(
+                        "Set one with `xmrts connect --daemon <url>` or run `xmrts finalize` later.",
+                    );
+                    (0u64, [0u8; 32])
+                }
             }
         }
     } else {
@@ -374,12 +382,25 @@ fn canonical_key(p: &Path) -> Result<String> {
     }
 }
 
+/// Poll the wallet for confirmation (M4). Monero averages a block every
+/// ~2 minutes with Poisson arrivals, so ~37% of stamps need more than 2
+/// minutes. We wait ~10 minutes (120 x 5s) with a visible countdown; the
+/// pending record is already on disk, so Ctrl-C is safe at any point and
+/// `xmrts finalize` finishes the job later.
 async fn wait_for_confirmation(
     client: &crate::wallet::rpc::WalletRpc,
     txid: &str,
+    progress: &indicatif::ProgressBar,
 ) -> Option<(u64, [u8; 32])> {
-    for _ in 0..24 {
-        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+    const ROUNDS: u64 = 120;
+    const STEP_SECS: u64 = 5;
+    for i in 0..ROUNDS {
+        tokio::time::sleep(std::time::Duration::from_secs(STEP_SECS)).await;
+        let elapsed = (i + 1) * STEP_SECS;
+        let remain = (ROUNDS - i - 1) * STEP_SECS;
+        progress.set_message(format!(
+            "Waiting for block... {elapsed}s in, ~{remain}s left (blocks average ~2 min; safe to Ctrl-C, then `xmrts finalize`)"
+        ));
         if let Ok(v) = crate::wallet::rpc::get_transfer_by_txid(client, txid).await {
             let h = v
                 .get("transfer")

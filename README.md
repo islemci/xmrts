@@ -20,9 +20,11 @@ xmrts doctor
 xmrts --help
 ```
 
-Slow blocks don't lose work: if confirmation isn't seen in time, `stamp`
-leaves pending proofs plus a recovery record, and `xmrts finalize`
-upgrades them to anchored proofs once the transaction confirms.
+Pending is normal: Monero averages a block every ~2 minutes, so `stamp`
+waits up to ~10 minutes for confirmation and often leaves pending proofs
+plus a recovery record. `xmrts finalize` upgrades them to anchored proofs
+once the transaction is buried deep enough (10+ confirmations). Safe to
+Ctrl-C the wait at any time.
 
 ## Managed sidecar
 

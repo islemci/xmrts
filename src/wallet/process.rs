@@ -179,13 +179,14 @@ fn is_loopback(host: &str) -> bool {
     h == "127.0.0.1" || h == "localhost" || h == "::1"
 }
 
-/// Strip `http(s)://` for `--daemon-address host:port`.
+/// Normalize a daemon endpoint for `--daemon-address`.
+///
+/// The scheme MUST be kept: monero-wallet-rpc prepends `http://` when none
+/// is present, so stripping `https://` silently downgrades TLS daemons to
+/// plain HTTP (connection fails, and `transfer` later dies with
+/// `-4 Failed to get height`). Only trailing slashes are trimmed.
 pub fn strip_scheme(url: &str) -> String {
-    url.strip_prefix("https://")
-        .or_else(|| url.strip_prefix("http://"))
-        .unwrap_or(url)
-        .trim_end_matches('/')
-        .to_string()
+    url.trim_end_matches('/').to_string()
 }
 
 /// Resolve a runnable sidecar from config, or report why management is

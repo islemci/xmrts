@@ -237,7 +237,20 @@ pub async fn run(args: &StampArgs, verbose: bool, stagenet: bool) -> Result<()> 
     let previewed =
         transaction::preview_timestamp(&client, &address, args.amount, &extra_hex).await;
     super::ui::abandon(&fee_bar);
-    let (preview, tx_hex) = previewed.map_err(|e| anyhow::anyhow!("Wallet said no: {e}"))?;
+    let (preview, tx_hex) = previewed.map_err(|e| {
+        let msg = e.to_string();
+        // `transfer` needs the wallet's own daemon link (decoy outputs).
+        // "Failed to get height" means the sidecar cannot reach its daemon:
+        // usually it was started before the daemon was configured, or the
+        // daemon address lost its https:// scheme.
+        if msg.contains("Failed to get height") || msg.contains("no connection to daemon") {
+            anyhow::anyhow!(
+                "Wallet said no: {e}\n\nThe wallet cannot reach its daemon, so it cannot build the tx.\nTry:\n\n    xmrts wallet stop\n    xmrts wallet start\n\nthen `xmrts doctor` (Daemon tip should move and Wallet height should catch up)."
+            )
+        } else {
+            anyhow::anyhow!("Wallet said no: {e}")
+        }
+    })?;
     super::ui::field(
         "Fee",
         &super::ui::with_fiat(

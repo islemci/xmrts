@@ -46,8 +46,21 @@ else
 fi
 
 if [ ! -d "$WORK/.git" ]; then
+  if [ -d "$WORK" ]; then
+    # Cache skeleton from a previous run (restored cache dirs, no .git):
+    # set it aside, clone fresh, merge it back. The cached depends prefix
+    # stays valid: same tag (script pins it) and same script (cache key
+    # includes this file's hash, so a changed script starts uncached).
+    STASH="$(mktemp -d)"
+    mv "$WORK" "$STASH/prev"
+    mkdir -p "$(dirname "$WORK")"
+  fi
   git clone --recursive --depth 1 --branch "$TAG" \
     https://github.com/monero-project/monero.git "$WORK"
+  if [ -n "${STASH:-}" ]; then
+    cp -a "$STASH/prev/." "$WORK/"
+    rm -rf "$STASH"
+  fi
 else
   git -C "$WORK" fetch --depth 1 origin "refs/tags/$TAG:refs/tags/$TAG" || true
   git -C "$WORK" checkout --detach "$TAG"

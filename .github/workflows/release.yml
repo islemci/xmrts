@@ -45,7 +45,7 @@ jobs:
           sudo apt-get update &&
           sudo apt-get install -y build-essential cmake pkg-config
           autoconf automake libtool curl git python3 ccache gperf
-          autotools-dev bsdmainutils unzip ca-certificates
+          autotools-dev bsdmainutils unzip ca-certificates libtinfo5
 
       # The patch never touches dependencies, so a cached depends prefix
       # stays valid across releases (keyed by tag+platform). ccache covers
@@ -55,7 +55,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ runner.temp }}/monero-build/contrib/depends/${{ matrix.target }}
-          key: depends-${{ matrix.target }}-${{ inputs.monero-tag || 'v0.18.5.0' }}
+          key: depends-${{ matrix.target }}-${{ inputs.monero-tag || 'v0.18.5.0' }}-${{ hashFiles('scripts/build-wallet-rpc.sh') }}
 
       - name: Cache ccache
         uses: actions/cache@v4

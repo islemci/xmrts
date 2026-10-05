@@ -100,7 +100,8 @@ pub fn find_binary(explicit: Option<&str>) -> Result<PathBuf, ProcessError> {
         }
     }
     Err(ProcessError::BinaryNotFound(
-        "monero-wallet-rpc not found beside xmrts, in /opt/monero, or on PATH; set it with `xmrts init --wallet-rpc-path <path>`".to_string(),
+        "monero-wallet-rpc not found. Set it with `xmrts init --wallet-rpc-path <path>`"
+            .to_string(),
     ))
 }
 
@@ -130,7 +131,7 @@ fn find_on_path(name: &Path) -> Option<PathBuf> {
 /// (mode 0600, see `save_config`) and passed to the sidecar *and* used
 /// for our own requests, so the user never needs to know, type, or
 /// remember anything. Explicitly configured credentials are never
-/// overwritten — only missing pieces are filled in.
+/// overwritten - only missing pieces are filled in.
 /// Returns true when anything was generated.
 pub fn ensure_credentials(cfg: &mut WalletConfig) -> bool {
     let mut generated = false;
@@ -192,14 +193,13 @@ pub fn strip_scheme(url: &str) -> String {
 pub fn resolve(cfg: &WalletConfig) -> Result<SidecarConfig, ProcessError> {
     let wallet_dir = cfg.wallet_dir.clone().ok_or_else(|| {
         ProcessError::NotConfigured(
-            "no wallet directory configured; set it with `xmrts init --wallet-dir <dir>`"
-                .to_string(),
+            "No wallet folder set. Run `xmrts init --wallet-dir <folder>`".to_string(),
         )
     })?;
     let (host, port) = parse_endpoint(&cfg.endpoint)?;
     if !is_loopback(&host) {
         return Err(ProcessError::NotConfigured(format!(
-            "endpoint {} is not loopback; sidecar management is local-only",
+            "Sidecar needs a local endpoint. {} is remote so control stays off",
             cfg.endpoint
         )));
     }
@@ -277,7 +277,7 @@ fn read_pid() -> Option<u32> {
 
 fn refresh_all(sys: &mut sysinfo::System) {
     // Plain refresh_processes() leaves cmd/exe empty on some platforms
-    // (notably macOS); request everything — identity checks need argv.
+    // (notably macOS); request everything - identity checks need argv.
     sys.refresh_processes_specifics(
         sysinfo::ProcessesToUpdate::All,
         true,
@@ -298,6 +298,28 @@ fn process_cmdline(pid: u32) -> Option<Vec<String>> {
     )
 }
 
+/// Any live wallet process bound to `port`, ours or not.
+fn find_listener_pid(port: u16) -> Option<u32> {
+    use sysinfo::{get_current_pid, System};
+    let mut sys = System::new();
+    refresh_all(&mut sys);
+    let me = get_current_pid().ok();
+    for (pid, proc) in sys.processes() {
+        if me.is_some_and(|m| m == *pid) {
+            continue;
+        }
+        let cmd: Vec<String> = proc
+            .cmd()
+            .iter()
+            .map(|s| s.to_string_lossy().into_owned())
+            .collect();
+        if cmdline_matches(&cmd, port) {
+            return Some(pid.as_u32());
+        }
+    }
+    None
+}
+
 /// Check status without changing anything. `endpoint` is the configured
 /// wallet RPC URL (for health checks); `port` selects our sidecar.
 pub async fn status(cfg: &WalletConfig, client: &super::rpc::WalletRpc) -> SidecarStatus {
@@ -307,11 +329,21 @@ pub async fn status(cfg: &WalletConfig, client: &super::rpc::WalletRpc) -> Sidec
         Err(_) => return SidecarStatus::NotManaged("sidecar unresolvable".to_string()),
     };
     let Some(pid) = read_pid() else {
+        // No pidfile, but something foreign may still hold the port.
+        if let Some(foreign) = find_listener_pid(sidecar.bind_port) {
+            return SidecarStatus::Unhealthy(foreign);
+        }
         return SidecarStatus::Stopped;
     };
     match process_cmdline(pid) {
         Some(cmd) if cmdline_matches(&cmd, sidecar.bind_port) => {}
-        _ => return SidecarStatus::Stopped, // stale pidfile or foreign process
+        // Stale pidfile. Check for a foreign holder before saying stopped.
+        _ => {
+            if let Some(foreign) = find_listener_pid(sidecar.bind_port) {
+                return SidecarStatus::Unhealthy(foreign);
+            }
+            return SidecarStatus::Stopped;
+        }
     }
     match client.get_version().await {
         Ok((maj, min)) => SidecarStatus::Running {
@@ -319,6 +351,11 @@ pub async fn status(cfg: &WalletConfig, client: &super::rpc::WalletRpc) -> Sidec
             rpc_major: maj,
             rpc_minor: min,
         },
+        Err(e) if e.is_auth_failure() => {
+            // Our pid answers but rejects our login. It kept an old login
+            // (monero stores it next to the binary) or someone changed it.
+            SidecarStatus::Unhealthy(pid)
+        }
         Err(_) => SidecarStatus::Unhealthy(pid),
     }
 }
@@ -329,23 +366,43 @@ pub async fn status(cfg: &WalletConfig, client: &super::rpc::WalletRpc) -> Sidec
 /// needs to know them. Never opens a wallet: opening needs the wallet
 /// password, which xmrts must not hold.
 pub async fn start(cfg: &mut WalletConfig) -> Result<u32, ProcessError> {
+    // Check before touching config. A live holder stays live, so never
+    // regen creds or spawn into an occupied port.
+    let _ = resolve(cfg)?;
+    let probe = cfg.client();
+    match status(cfg, &probe).await {
+        SidecarStatus::Running { pid, .. } => return Ok(pid),
+        SidecarStatus::Unhealthy(pid) => {
+            return Err(ProcessError::Config(format!(
+                "Port holds a wallet (pid {pid}) that does not answer us. Stop it first, then retry"
+            )));
+        }
+        _ => {}
+    }
+    // Backstop: something answers that status could not attribute
+    // (e.g. a non wallet process on the port). A 401 means it uses a
+    // different login. Only a refused connection means the port is free.
+    match probe.get_version().await {
+        Ok(_) => {
+            return Err(ProcessError::Config(format!(
+                "Something else already answers at {}. Stop it first or keep using it",
+                cfg.endpoint
+            )));
+        }
+        Err(e) if e.is_auth_failure() => {
+            return Err(ProcessError::Config(format!(
+                "Something else answers at {} with a different login. Stop it first, then retry",
+                cfg.endpoint
+            )));
+        }
+        Err(_) => {}
+    }
     if ensure_credentials(cfg) {
         super::connection::save_config(cfg).map_err(|e| ProcessError::Config(e.to_string()))?;
-        println!("Generated RPC credentials for the sidecar (stored locally, mode 0600).");
+        println!("Made fresh RPC login for the sidecar. Saved locally.");
     }
     let client = cfg.client();
     let sidecar = resolve(cfg)?;
-    if let SidecarStatus::Running { pid, .. } = status(cfg, &client).await {
-        return Ok(pid);
-    }
-    // Something answers that isn't ours (e.g. a manually started wallet):
-    // refuse rather than fight over the port.
-    if client.get_version().await.is_ok() {
-        return Err(ProcessError::Config(format!(
-            "endpoint {} already answers, but it is not our sidecar (no pidfile); stop that process first or leave management to it",
-            cfg.endpoint
-        )));
-    }
     let log_path = SidecarConfig::logfile()
         .ok_or_else(|| ProcessError::Config("no config dir".to_string()))?;
     if let Some(parent) = log_path.parent() {
@@ -375,9 +432,7 @@ pub async fn start(cfg: &mut WalletConfig) -> Result<u32, ProcessError> {
         std::fs::write(pf, pid.to_string())?;
     }
     // Wait for health (generous: first start loads the binary cold).
-    // Keep the last error: a 401-without-credentials (server kept an old
-    // --rpc-login via its .login file while we configured none) is the
-    // classic cause, and the generic timeout hides it.
+    // Keep the last error so the timeout does not hide the real cause.
     let mut last_err = String::from("no attempts made");
     for _ in 0..30 {
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
@@ -386,8 +441,23 @@ pub async fn start(cfg: &mut WalletConfig) -> Result<u32, ProcessError> {
             Err(e) => last_err = e.to_string(),
         }
     }
+    // The spawn failed to come up. Drop a stale pidfile pointing at the
+    // dead child so later runs see the true state.
+    if !process_cmdline(pid).is_some_and(|cmd| cmdline_matches(&cmd, sidecar.bind_port)) {
+        if let Some(pf) = SidecarConfig::pidfile() {
+            let ours = std::fs::read_to_string(&pf)
+                .ok()
+                .is_some_and(|s| s.trim() == pid.to_string());
+            if ours {
+                let _ = std::fs::remove_file(pf);
+            }
+        }
+    }
+    let log_hint = SidecarConfig::logfile()
+        .map(|p| format!(" See {}", p.display()))
+        .unwrap_or_default();
     Err(ProcessError::Config(format!(
-        "wallet RPC did not become healthy in time; last error: {last_err}"
+        "Wallet RPC stayed quiet. Last error: {last_err}.{log_hint}"
     )))
 }
 
@@ -396,7 +466,7 @@ pub async fn start(cfg: &mut WalletConfig) -> Result<u32, ProcessError> {
 pub fn stop(cfg: &WalletConfig) -> Result<String, ProcessError> {
     let sidecar = resolve(cfg)?;
     let Some(pid) = read_pid() else {
-        return Ok("sidecar not running (no pidfile)".to_string());
+        return Ok("Sidecar is not running.".to_string());
     };
     use sysinfo::{Pid, Signal, System};
     let mut sys = System::new();
@@ -416,7 +486,7 @@ pub fn stop(cfg: &WalletConfig) -> Result<String, ProcessError> {
             if let Some(pf) = SidecarConfig::pidfile() {
                 let _ = std::fs::remove_file(pf);
             }
-            return Ok("pidfile was stale (no managed sidecar behind it); cleared".to_string());
+            return Ok("Found a stale pid file. Cleared it.".to_string());
         }
     }
     let proc = match sys.process(sys_pid) {
@@ -425,7 +495,7 @@ pub fn stop(cfg: &WalletConfig) -> Result<String, ProcessError> {
             if let Some(pf) = SidecarConfig::pidfile() {
                 let _ = std::fs::remove_file(pf);
             }
-            return Ok(format!("sidecar (pid {pid}) already exited"));
+            return Ok(format!("Sidecar (pid {pid}) already stopped."));
         }
         Some(p) => p,
     };
@@ -443,7 +513,7 @@ pub fn stop(cfg: &WalletConfig) -> Result<String, ProcessError> {
     if let Some(pf) = SidecarConfig::pidfile() {
         let _ = std::fs::remove_file(pf);
     }
-    Ok(format!("sidecar (pid {pid}) stopped"))
+    Ok(format!("Sidecar (pid {pid}) stopped."))
 }
 
 #[cfg(test)]

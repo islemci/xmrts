@@ -19,6 +19,17 @@ pub enum RpcError {
     Http(#[from] reqwest::Error),
 }
 
+impl RpcError {
+    /// True when the server answered but rejected auth (HTTP 401).
+    /// Something listens on the port with a different login than ours.
+    pub fn is_auth_failure(&self) -> bool {
+        match self {
+            RpcError::Connection { message, .. } => message.contains("401"),
+            _ => false,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct WalletRpc {
     endpoint: String,
@@ -116,7 +127,7 @@ impl WalletRpc {
             .ok_or_else(|| RpcError::Malformed("missing result field".into()))
     }
 
-    /// `get_version` — connectivity check, no wallet required.
+    /// `get_version` - connectivity check, no wallet required.
     pub async fn get_version(&self) -> Result<(u32, u32), RpcError> {
         let r = self.call("get_version", json!({})).await?;
         let v = r
@@ -126,7 +137,7 @@ impl WalletRpc {
         Ok((((v >> 16) & 0xFFFF) as u32, (v & 0xFFFF) as u32))
     }
 
-    /// `get_height` — requires an open wallet.
+    /// `get_height` - requires an open wallet.
     pub async fn get_height(&self) -> Result<u64, RpcError> {
         let r = self.call("get_height", json!({})).await?;
         r.get("height")
@@ -134,7 +145,7 @@ impl WalletRpc {
             .ok_or_else(|| RpcError::Malformed("missing height".into()))
     }
 
-    /// `get_address` — primary address (account 0).
+    /// `get_address` - primary address (account 0).
     pub async fn get_address(&self) -> Result<String, RpcError> {
         let r = self.address_info(0).await?;
         r.get("address")
@@ -169,7 +180,7 @@ impl WalletRpc {
         Ok(found)
     }
 
-    /// `get_balance` — returns (balance, unlocked_balance) in atomic units.
+    /// `get_balance` - returns (balance, unlocked_balance) in atomic units.
     pub async fn get_balance(&self) -> Result<(u64, u64), RpcError> {
         let r = self
             .call("get_balance", json!({"account_index": 0}))
@@ -185,7 +196,7 @@ impl WalletRpc {
         Ok((b, u))
     }
 
-    /// `validate_address` — also reports the nettype when the daemon
+    /// `validate_address` - also reports the nettype when the daemon
     /// answers; used to cross-check proof network vs wallet network.
     pub async fn validate_address(&self, address: &str) -> Result<Value, RpcError> {
         self.call(
@@ -248,7 +259,7 @@ pub async fn transfer_with_extra(
     ))
 }
 
-/// `open_wallet` — opens a wallet file on the server. The password is
+/// `open_wallet` - opens a wallet file on the server. The password is
 /// passed straight through and must never be logged or persisted by
 /// callers (use an interactive hidden prompt + zeroizing memory).
 pub async fn open_wallet(
@@ -263,13 +274,13 @@ pub async fn open_wallet(
     .await
 }
 
-/// `get_transfer_by_txid` — used to poll confirmation status.
+/// `get_transfer_by_txid` - used to poll confirmation status.
 pub async fn get_transfer_by_txid(rpc: &WalletRpc, txid: &str) -> Result<Value, RpcError> {
     rpc.call("get_transfer_by_txid", json!({"txid": txid}))
         .await
 }
 
-/// `relay_tx` — broadcast a transaction previously created with
+/// `relay_tx` - broadcast a transaction previously created with
 /// `do_not_relay`. Returns the relayed transaction hash.
 pub async fn relay_tx(rpc: &WalletRpc, tx_hex: &str) -> Result<String, RpcError> {
     let r = rpc.call("relay_tx", json!({"hex": tx_hex})).await?;
@@ -497,6 +508,22 @@ mod tests {
         let h =
             digest_auth_header("POST", "/json_rpc", &challenges, "u", "p").expect("must answer");
         assert!(h.contains("algorithm=SHA-256"));
+    }
+
+    #[test]
+    fn flags_auth_failures() {
+        let auth = super::RpcError::Connection {
+            endpoint: "http://127.0.0.1:18082".to_string(),
+            message:
+                "wallet RPC rejected the username/password (HTTP 401 even with Digest response)"
+                    .to_string(),
+        };
+        assert!(auth.is_auth_failure());
+        let down = super::RpcError::Connection {
+            endpoint: "http://127.0.0.1:18082".to_string(),
+            message: "connection refused".to_string(),
+        };
+        assert!(!down.is_auth_failure());
     }
 
     #[test]

@@ -280,6 +280,15 @@ impl Proof {
     /// Human-readable dump (`verify --verbose`).
     pub fn describe(&self) -> String {
         let mut s = String::new();
+        // Pending vs anchored is obvious at a glance (UX).
+        s.push_str(&format!(
+            "status:        {}\n",
+            if self.is_pending() {
+                "pending (no block yet)"
+            } else {
+                "anchored"
+            }
+        ));
         s.push_str(&format!("version:      {}\n", PROTOCOL_VERSION));
         s.push_str(&format!(
             "hash_algo:     SHA-256 (0x{:02x})\n",

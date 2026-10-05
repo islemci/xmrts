@@ -157,6 +157,11 @@ pub fn run(args: &SettingArgs) -> Result<()> {
             apply_set(&mut cfg, key, value)?;
             let saved = connection::save_config(&cfg)?;
             super::ui::ok(&format!("{key} is now {}", describe(&cfg, key)?));
+            if key == "price" && value == "true" {
+                super::ui::note(
+                    "Price estimates call CoinGecko over the network (third-party request).",
+                );
+            }
             super::ui::hint(&format!("Saved to {}", saved.display()));
         }
         SettingCommand::Unset { key } => {

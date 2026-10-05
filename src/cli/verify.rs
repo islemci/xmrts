@@ -93,9 +93,33 @@ pub async fn run(args: &VerifyArgs, verbose: bool, stagenet: bool) -> Result<()>
     let checked = blockchain_check(&proof, args.daemon.as_deref(), stagenet).await;
     super::ui::abandon(&bar);
     match checked {
-        Ok(anchor) => {
-            super::ui::ok("Mark found on chain.");
-            super::ui::ok("Tx is confirmed.");
+        Ok((anchor, daemon_used)) => {
+            // L2+UX1: lead with time, then list what was trusted.
+            println!();
+            if anchor.block_timestamp > 0 {
+                println!(
+                    "No later than {} (block {}, {} confirmations).",
+                    crate::wallet::daemon::format_block_time(anchor.block_timestamp),
+                    anchor.height,
+                    anchor.confirmations
+                );
+            } else {
+                println!(
+                    "No later than block {} ({} confirmations).",
+                    anchor.height, anchor.confirmations
+                );
+            }
+            println!();
+            super::ui::field("Transaction", &hex::encode(proof.txid));
+            super::ui::field("Block hash", &hex::encode(proof.block_hash));
+            super::ui::field("Network", proof.network.as_str());
+            super::ui::field("Confirmations", &anchor.confirmations.to_string());
+            println!();
+            println!("Trusted: daemon {daemon_used} (single source), block hash matched,");
+            println!(
+                "height exact, {}+ confirmations recommended.",
+                crate::wallet::daemon::MIN_CONFIRMATIONS
+            );
             if anchor.confirmations < crate::wallet::daemon::MIN_CONFIRMATIONS {
                 super::ui::warn(&format!(
                     "Only {} confirmation(s); want {}+. Reorg risk: wait before relying on this.",
@@ -108,13 +132,6 @@ pub async fn run(args: &VerifyArgs, verbose: bool, stagenet: bool) -> Result<()>
                     "NON-MAINNET proof: testnet/stagenet marks have no security value.",
                 );
             }
-            super::ui::ok("Time is proven.");
-            println!();
-            super::ui::field("Block", &anchor.height.to_string());
-            super::ui::field("Transaction", &hex::encode(proof.txid));
-            super::ui::field("Confirmations", &anchor.confirmations.to_string());
-            println!();
-            println!("This file lived no later than block {}.", anchor.height);
         }
         Err(e) => {
             let _ = ok;
@@ -137,7 +154,7 @@ async fn blockchain_check(
     proof: &Proof,
     daemon_override: Option<&str>,
     stagenet: bool,
-) -> Result<crate::wallet::daemon::AnchorCheck> {
+) -> Result<(crate::wallet::daemon::AnchorCheck, String)> {
     let cfg = connection::load_config();
     let effective_net = if stagenet {
         "stagenet".to_string()
@@ -180,7 +197,7 @@ async fn blockchain_check(
     // daemon nettype match (H1+M1). No wallet involved (M2): verification
     // depends only on the proof file, the original file, and daemon(s).
     // M6: the chain holds the size-bound commitment for V2 proofs.
-    crate::wallet::daemon::verify_anchor_for_version(
+    let anchor = crate::wallet::daemon::verify_anchor_for_version(
         &daemon,
         &txid_hex,
         &proof.expected_commitment(),
@@ -195,5 +212,6 @@ async fn blockchain_check(
             "Tx {txid_hex} holds no mark for this file.\nIt lives but it does not anchor you. The wallet may have dropped the mark."
         ),
         other => anyhow::anyhow!("{other}"),
-    })
+    })?;
+    Ok((anchor, daemon))
 }

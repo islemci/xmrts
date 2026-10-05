@@ -51,6 +51,8 @@ pub struct AnchorCheck {
     pub block_hash: [u8; 32],
     pub confirmations: u64,
     pub chain_height: u64,
+    /// Block timestamp from the daemon (`block_timestamp`; 0 when unknown).
+    pub block_timestamp: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -73,8 +75,9 @@ impl DaemonClient {
         }
     }
 
-    /// Fetch (`tx_extra` hex, block height) for a confirmed transaction.
-    pub async fn tx_extra(&self, txid_hex: &str) -> Result<(String, u64), DaemonError> {
+    /// Fetch (`tx_extra` hex, block height, block timestamp) for a
+    /// confirmed transaction.
+    pub async fn tx_extra(&self, txid_hex: &str) -> Result<(String, u64, u64), DaemonError> {
         let url = format!("{}/get_transactions", self.endpoint.trim_end_matches('/'));
         let resp: serde_json::Value = self
             .client
@@ -118,7 +121,19 @@ impl DaemonClient {
             txid: txid_hex.to_string(),
         })?;
         let height = tx.get("block_height").and_then(|h| h.as_u64()).unwrap_or(0);
-        Ok((extra, height))
+        let timestamp = tx
+            .get("block_timestamp")
+            .and_then(|t| t.as_u64())
+            .unwrap_or(0);
+        Ok((extra, height, timestamp))
+    }
+}
+
+/// Format a chain block timestamp as `YYYY-MM-DD HH:MM UTC` (UX).
+pub fn format_block_time(timestamp: u64) -> String {
+    match chrono::DateTime::from_timestamp(timestamp as i64, 0) {
+        Some(dt) => dt.format("%Y-%m-%d %H:%M UTC").to_string(),
+        None => format!("{timestamp} (raw Unix time)"),
     }
 }
 
@@ -182,7 +197,7 @@ pub async fn confirm_commitment_for_version(
     expected_merkle_ver: Option<u8>,
 ) -> Result<u64, DaemonError> {
     let client = DaemonClient::new(daemon_endpoint);
-    let (extra_hex, height) = client.tx_extra(txid_hex).await?;
+    let (extra_hex, height, _) = client.tx_extra(txid_hex).await?;
     if height == 0 {
         return Err(DaemonError::Unconfirmed {
             txid: txid_hex.to_string(),
@@ -284,7 +299,7 @@ pub async fn verify_anchor_for_version(
         return Err(DaemonError::ZeroBlockHash);
     }
     let client = DaemonClient::new(daemon_endpoint);
-    let (extra_hex, chain_height) = client.tx_extra(txid_hex).await?;
+    let (extra_hex, chain_height, block_timestamp) = client.tx_extra(txid_hex).await?;
     if chain_height == 0 {
         return Err(DaemonError::Unconfirmed {
             txid: txid_hex.to_string(),
@@ -329,5 +344,6 @@ pub async fn verify_anchor_for_version(
         block_hash: header_hash,
         confirmations,
         chain_height: tip,
+        block_timestamp,
     })
 }

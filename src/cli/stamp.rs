@@ -35,7 +35,9 @@ pub struct StampArgs {
     /// Send to this address (default: your wallet address).
     #[arg(long)]
     pub address: Option<String>,
-    /// Send amount in atomic units (default 10000).
+    /// Send amount in atomic units (default 10000). This is a self-send
+    /// to carry the commitment: the amount returns to your wallet and only
+    /// the fee is lost.
     #[arg(long, default_value_t = 10_000)]
     pub amount: u64,
     /// Folder for .xmrts proofs (default: next to each file).

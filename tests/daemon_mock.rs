@@ -113,7 +113,7 @@ fn route(path: &str, body: &serde_json::Value, state: &Arc<Mutex<MockState>>) ->
             .unwrap_or("");
         match st.txs.get(txid) {
             Some((extra, h)) => serde_json::json!({
-                "txs": [{"extra": extra, "block_height": h}],
+                "txs": [{"extra": extra, "block_height": h, "block_timestamp": 1760000000u64}],
             }),
             None => serde_json::json!({ "txs": [] }),
         }
@@ -183,6 +183,11 @@ async fn correct_tx_and_block_verifies() {
     .expect("correct anchor must verify");
     assert_eq!(anchor.height, 3_000_090);
     assert_eq!(anchor.block_hash, block_hash);
+    assert_eq!(anchor.block_timestamp, 1760000000u64);
+    assert_eq!(
+        xmrts::wallet::daemon::format_block_time(1760000000),
+        "2025-10-09 08:53 UTC"
+    );
 }
 
 #[tokio::test]

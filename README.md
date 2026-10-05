@@ -46,6 +46,14 @@ open yours via `open_wallet` after `wallet start`.
 `stamp --offline` writes pending (unanchored) proofs without a wallet.
 Useful for testing the protocol plumbing. `verify --offline` checks
 cryptography only and clearly reports that anchoring was NOT checked.
+## Install
+
+xmrts can be installed via [Homebrew](https://brew.sh) on both MacOS and Linux devices.
+
+```bash
+brew tap islemci/xmrts
+brew install xmrts
+```
 
 ## Build
 

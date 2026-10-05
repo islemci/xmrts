@@ -78,7 +78,7 @@ impl WalletConfig {
         Network::from_str(&self.network).map_err(|e| ConnectionError::Config(e.to_string()))
     }
 
-    /// True when the endpoint is not loopback — caller must warn about
+    /// True when the endpoint is not loopback - caller must warn about
     /// non-TLS transport.
     pub fn is_remote(&self) -> bool {
         let e = self.endpoint.to_ascii_lowercase();
@@ -108,7 +108,7 @@ impl WalletConfig {
 
 /// Platform config directory: `~/.config/xmrts` (Linux),
 /// `~/Library/Application Support/xmrts` (macOS), `%APPDATA%\xmrts`
-/// (Windows) — via the `directories` crate.
+/// (Windows) - via the `directories` crate.
 pub fn config_dir() -> Option<PathBuf> {
     directories::ProjectDirs::from("", "", "xmrts").map(|d| d.config_dir().to_path_buf())
 }
@@ -119,6 +119,19 @@ pub fn config_file() -> Option<PathBuf> {
 
 pub fn pending_dir() -> Option<PathBuf> {
     config_dir().map(|d| d.join("pending"))
+}
+
+/// Create config and pending dirs when missing. Safe to call often.
+/// Returns the config dir.
+pub fn ensure_dirs() -> anyhow::Result<PathBuf> {
+    let Some(dir) = config_dir() else {
+        anyhow::bail!("could not find a config folder on this system");
+    };
+    std::fs::create_dir_all(&dir)?;
+    if let Some(pending) = pending_dir() {
+        std::fs::create_dir_all(&pending)?;
+    }
+    Ok(dir)
 }
 
 pub fn load_config() -> WalletConfig {

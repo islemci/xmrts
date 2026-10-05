@@ -30,13 +30,20 @@ esac
 
 OS="$(uname -s)"
 ARCH="$(uname -m)"
-case "$OS-$ARCH" in
-  Darwin-arm64)  TRIPLE="aarch64-apple-darwin" ;;
-  Darwin-x86_64) TRIPLE="x86_64-apple-darwin" ;;
-  Linux-x86_64)  TRIPLE="x86_64-linux-gnu" ;;
-  Linux-aarch64) TRIPLE="aarch64-linux-gnu" ;;
-  *) echo "unsupported platform $OS-$ARCH" >&2; exit 1 ;;
-esac
+# Cross builds (e.g. macOS-from-Linux, the way upstream builds darwin
+# targets because the native-mac depends path is broken by design):
+# set MONERO_HOST explicitly, autodetect otherwise.
+if [ -n "${MONERO_HOST:-}" ]; then
+  TRIPLE="$MONERO_HOST"
+else
+  case "$OS-$ARCH" in
+    Darwin-arm64)  TRIPLE="aarch64-apple-darwin" ;;
+    Darwin-x86_64) TRIPLE="x86_64-apple-darwin" ;;
+    Linux-x86_64)  TRIPLE="x86_64-linux-gnu" ;;
+    Linux-aarch64) TRIPLE="aarch64-linux-gnu" ;;
+    *) echo "unsupported platform $OS-$ARCH (or set MONERO_HOST)" >&2; exit 1 ;;
+  esac
+fi
 
 if [ ! -d "$WORK/.git" ]; then
   git clone --recursive --depth 1 --branch "$TAG" \

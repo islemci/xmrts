@@ -65,6 +65,25 @@ else
   git -C "$WORK" fetch --depth 1 origin "refs/tags/$TAG:refs/tags/$TAG" || true
   git -C "$WORK" checkout --detach "$TAG"
 fi
+# Supply chain: verify the Monero source is exactly the expected commit
+# before applying the patch. Pinned tags and their peeled commits:
+#   v0.18.5.0 -> 3ca4c30f73fe22d16a46cfba122556437da3618d
+# Custom tags require MONERO_COMMIT (full 40-hex) or the build aborts.
+case "$TAG" in
+  v0.18.5.0) EXPECTED_COMMIT="3ca4c30f73fe22d16a46cfba122556437da3618d" ;;
+  *)
+    if [ -z "${MONERO_COMMIT:-}" ]; then
+      echo "custom tag $TAG needs MONERO_COMMIT=<40-hex> (fail closed)" >&2
+      exit 1
+    fi
+    EXPECTED_COMMIT="$MONERO_COMMIT" ;;
+esac
+ACTUAL_COMMIT="$(git -C "$WORK" rev-parse "refs/tags/$TAG^{}" 2>/dev/null || git -C "$WORK" rev-parse HEAD)"
+if [ "$ACTUAL_COMMIT" != "$EXPECTED_COMMIT" ]; then
+  echo "monero $TAG commit mismatch: got $ACTUAL_COMMIT, want $EXPECTED_COMMIT" >&2
+  exit 1
+fi
+echo "monero $TAG verified at $ACTUAL_COMMIT"
 git -C "$WORK" submodule update --init --force
 
 # On macOS the depends tree targets an old deployment version; without

@@ -1,6 +1,6 @@
 [package]
 name = "xmrts"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
 description = "Decentralized file timestamping tool built on Monero"
 license = "MIT"

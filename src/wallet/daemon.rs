@@ -157,15 +157,29 @@ pub async fn block_hash(daemon_endpoint: &str, height: u64) -> Result<[u8; 32], 
         .try_into()
         .map_err(|_| DaemonError::Malformed("bad block hash length".to_string()))
 }
-/// Confirm the commitment for `root` is present in the transaction's
-/// `tx_extra` **and** the transaction is confirmed. Returns the
-/// chain-reported block height. Mempool transactions fail with
+/// Confirm the commitment for `expected_commitment` is present in the
+/// transaction's `tx_extra` **and** the transaction is confirmed. Returns
+/// the chain-reported block height. Mempool transactions fail with
 /// [`DaemonError::Unconfirmed`] even when the bytes match: presence
 /// without burial proves nothing about time.
+///
+/// `expected_commitment` is the size-bound root for V2 proofs
+/// (`commit_root`) and the raw root for legacy V1 proofs. When
+/// `expected_merkle_ver` is `Some`, the matching chain commitment must
+/// also carry that version byte.
 pub async fn confirm_commitment(
     daemon_endpoint: &str,
     txid_hex: &str,
-    root: &[u8; 32],
+    expected_commitment: &[u8; 32],
+) -> Result<u64, DaemonError> {
+    confirm_commitment_for_version(daemon_endpoint, txid_hex, expected_commitment, None).await
+}
+
+pub async fn confirm_commitment_for_version(
+    daemon_endpoint: &str,
+    txid_hex: &str,
+    expected_commitment: &[u8; 32],
+    expected_merkle_ver: Option<u8>,
 ) -> Result<u64, DaemonError> {
     let client = DaemonClient::new(daemon_endpoint);
     let (extra_hex, height) = client.tx_extra(txid_hex).await?;
@@ -176,7 +190,13 @@ pub async fn confirm_commitment(
     }
     let found = crate::protocol::commitment::find_commitments_hex(&extra_hex)
         .map_err(|e| DaemonError::Malformed(format!("commitment parse: {e}")))?;
-    if found.iter().any(|c| c.root == *root) {
+    let ok = found.iter().any(|c| {
+        c.root == *expected_commitment
+            && expected_merkle_ver
+                .map(|v| c.merkle_ver == v)
+                .unwrap_or(true)
+    });
+    if ok {
         Ok(height)
     } else {
         Err(DaemonError::CommitmentAbsent {
@@ -227,10 +247,35 @@ pub async fn get_info(daemon_endpoint: &str) -> Result<(String, u64), DaemonErro
 /// height (never `max`), `proof_block_hash` equals the header hash at
 /// that height, and daemon nettype equals the proof network.
 /// Returns the anchor with confirmation depth for H3 enforcement.
+///
+/// `expected_commitment` is the size-bound root for V2 proofs and the raw
+/// root for legacy V1; `proof_merkle_ver` (when `Some`) must match the
+/// chain commitment's version byte.
 pub async fn verify_anchor(
     daemon_endpoint: &str,
     txid_hex: &str,
-    root: &[u8; 32],
+    expected_commitment: &[u8; 32],
+    proof_height: u64,
+    proof_block_hash: &[u8; 32],
+    proof_network: &str,
+) -> Result<AnchorCheck, DaemonError> {
+    verify_anchor_for_version(
+        daemon_endpoint,
+        txid_hex,
+        expected_commitment,
+        None,
+        proof_height,
+        proof_block_hash,
+        proof_network,
+    )
+    .await
+}
+
+pub async fn verify_anchor_for_version(
+    daemon_endpoint: &str,
+    txid_hex: &str,
+    expected_commitment: &[u8; 32],
+    proof_merkle_ver: Option<u8>,
     proof_height: u64,
     proof_block_hash: &[u8; 32],
     proof_network: &str,
@@ -247,7 +292,11 @@ pub async fn verify_anchor(
     }
     let found = crate::protocol::commitment::find_commitments_hex(&extra_hex)
         .map_err(|e| DaemonError::Malformed(format!("commitment parse: {e}")))?;
-    if !found.iter().any(|c| c.root == *root) {
+    let ok = found.iter().any(|c| {
+        c.root == *expected_commitment
+            && proof_merkle_ver.map(|v| c.merkle_ver == v).unwrap_or(true)
+    });
+    if !ok {
         return Err(DaemonError::CommitmentAbsent {
             txid: txid_hex.to_string(),
         });

@@ -61,8 +61,21 @@ pub async fn run(args: &FinalizeArgs, verbose: bool, stagenet: bool) -> Result<(
         .clone()
         .or(cfg.daemon_endpoint.clone())
         .ok_or_else(|| anyhow::anyhow!("No daemon set. Run `xmrts connect --daemon <url>`"))?;
+    // M6: commitment is version-aware (V1 raw root, V2 size-bound).
+    // Old pendings default to V1 via serde.
+    let merkle_ver = op.merkle_ver;
+    crate::protocol::merkle::check_version(merkle_ver)
+        .map_err(|e| anyhow::anyhow!("Pending file holds a bad merkle version: {e}"))?;
+    let tree_size = op.sorted_hashes.len() as u64;
+    let commitment = crate::protocol::merkle::commitment_for_version(&root, tree_size, merkle_ver);
     let bar = super::ui::spinner("Checking chain...");
-    let height = crate::wallet::daemon::confirm_commitment(&daemon, &op.txid, &root).await;
+    let height = crate::wallet::daemon::confirm_commitment_for_version(
+        &daemon,
+        &op.txid,
+        &commitment,
+        Some(merkle_ver),
+    )
+    .await;
     super::ui::abandon(&bar);
     let height = height.map_err(|e| anyhow::anyhow!("Not ready yet: {e}"))?;
     super::ui::ok(&format!("Tx {} sits in block {height}.", op.txid));
@@ -91,16 +104,21 @@ pub async fn run(args: &FinalizeArgs, verbose: bool, stagenet: bool) -> Result<(
         pairs.push((h, path.to_path_buf()));
     }
     pairs.sort_by_key(|(h, _)| *h);
-    let recomputed: Vec<String> = pairs.iter().map(|(h, _)| hex::encode(h)).collect();
+    // M6: compare deduped sets (identical content shares one leaf).
+    let mut recomputed_unique: Vec<[u8; 32]> = Vec::new();
+    for (h, _) in &pairs {
+        if !recomputed_unique.contains(h) {
+            recomputed_unique.push(*h);
+        }
+    }
+    let mut recomputed_sorted: Vec<String> = recomputed_unique.iter().map(hex::encode).collect();
+    recomputed_sorted.sort();
     let mut stored = op.sorted_hashes.clone();
     stored.sort();
-    let mut recomputed_sorted = recomputed.clone();
-    recomputed_sorted.sort();
     if recomputed_sorted != stored {
         anyhow::bail!("Files changed since stamp. Cannot finish safely");
     }
-    let file_hashes: Vec<[u8; 32]> = pairs.iter().map(|(h, _)| *h).collect();
-    let (sorted, tree) = MerkleTree::build_from_unsorted(file_hashes)
+    let (sorted, tree) = MerkleTree::build_from_unsorted(recomputed_unique)
         .map_err(|e| anyhow::anyhow!("Tree failed: {e}"))?;
     if tree.root() != root {
         anyhow::bail!("Root changed. Cannot finish safely");

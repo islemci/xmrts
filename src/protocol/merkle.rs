@@ -13,9 +13,16 @@ use thiserror::Error;
 
 /// Merkle algorithm/version identifier.
 pub const MERKLE_V1: u8 = 0x01;
+/// V2: same tree shape as V1 (duplicate-last-node), but the chain
+/// commitment binds the tree size (M6 fix for the CVE-2012-2459 pattern
+/// where `[a,b,c]` and `[a,b,c,c]` shared a root).
+pub const MERKLE_V2: u8 = 0x02;
 
 pub const DOMAIN_LEAF: u8 = 0x00;
 pub const DOMAIN_NODE: u8 = 0x01;
+/// Domain separator for the size commitment:
+/// `commit_root = SHA256(0x02 || tree_size_le_u64 || top_root)`.
+pub const DOMAIN_COMMIT: u8 = 0x02;
 
 #[derive(Debug, Error)]
 pub enum MerkleError {
@@ -36,10 +43,36 @@ pub enum MerkleError {
 }
 
 pub fn check_version(v: u8) -> Result<(), MerkleError> {
-    if v == MERKLE_V1 {
+    if v == MERKLE_V1 || v == MERKLE_V2 {
         Ok(())
     } else {
         Err(MerkleError::UnknownVersion(v))
+    }
+}
+
+/// Size commitment (M6, Option A):
+/// `commit_root = SHA256(0x02 || tree_size_le_u64 || top_root)`.
+///
+/// V2 proofs carry `top_root` in the proof body (so existing Merkle paths
+/// keep working) but commit `commit_root` in `tx_extra`. Verifiers recompute
+/// it from `(proof.root, proof.tree_size)` and compare against the chain.
+/// Different sizes therefore commit differently even when the raw tree
+/// roots collide.
+pub fn commit_root(top_root: &[u8; 32], tree_size: u64) -> [u8; 32] {
+    let mut buf = [0u8; 41];
+    buf[0] = DOMAIN_COMMIT;
+    buf[1..9].copy_from_slice(&tree_size.to_le_bytes());
+    buf[9..41].copy_from_slice(top_root);
+    hash_bytes(&buf)
+}
+
+/// The commitment value for a tree: V1 commits the raw root (legacy),
+/// V2 commits the size-bound root.
+pub fn commitment_for_version(top_root: &[u8; 32], tree_size: u64, merkle_ver: u8) -> [u8; 32] {
+    if merkle_ver == MERKLE_V2 {
+        commit_root(top_root, tree_size)
+    } else {
+        *top_root
     }
 }
 

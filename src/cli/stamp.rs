@@ -57,9 +57,8 @@ pub async fn run(args: &StampArgs, verbose: bool, stagenet: bool) -> Result<()> 
             anyhow::bail!("Cannot read file: {}", f.display());
         }
         let canon = canonical_key(f)?;
-        if seen.insert(canon, 1).is_some() {
-            super::ui::note("Same file twice. It gets two leaves. Root covers both.");
-            continue;
+        if seen.insert(canon.clone(), 1).is_some() {
+            anyhow::bail!("Same file twice: {}. List each file once.", f.display());
         }
     }
 
@@ -74,16 +73,36 @@ pub async fn run(args: &StampArgs, verbose: bool, stagenet: bool) -> Result<()> 
     }
 
     hashes.sort_by_key(|(h, _)| *h);
-    let file_hashes: Vec<[u8; 32]> = hashes.iter().map(|(h, _)| *h).collect();
-    let (sorted, tree) = MerkleTree::build_from_unsorted(file_hashes.clone())
+    // M6: dedupe identical content to one leaf. Files with the same bytes
+    // share a leaf; each still gets its own proof file.
+    let mut unique_hashes: Vec<[u8; 32]> = Vec::new();
+    for (h, _) in &hashes {
+        if !unique_hashes.contains(h) {
+            unique_hashes.push(*h);
+        }
+    }
+    if unique_hashes.len() != hashes.len() {
+        super::ui::note(&format!(
+            "{} file(s) share content; deduped to {} leaf/leaves.",
+            hashes.len(),
+            unique_hashes.len()
+        ));
+    }
+    let (sorted, tree) = MerkleTree::build_from_unsorted(unique_hashes.clone())
         .map_err(|e| anyhow::anyhow!("Tree failed: {e}"))?;
     let root = tree.root();
+    let commitment = crate::protocol::merkle::commitment_for_version(
+        &root,
+        tree.tree_size(),
+        crate::protocol::merkle::MERKLE_V2,
+    );
     super::ui::header("◆", "Stamp");
     super::ui::ok("Tree built.");
     super::ui::field("Files", &format!("{}", hashes.len()));
     super::ui::field("Root", &hex::encode(root));
 
-    let extra_hex = commitment::build_tx_extra_hex(&root);
+    let extra_hex =
+        commitment::build_tx_extra_hex_for(&commitment, crate::protocol::merkle::MERKLE_V2);
     if verbose {
         println!("Commitment: {extra_hex}");
     }
@@ -198,6 +217,7 @@ pub async fn run(args: &StampArgs, verbose: bool, stagenet: bool) -> Result<()> 
             .as_ref()
             .map(|d| d.to_string_lossy().into_owned()),
         network: network_name.clone(),
+        merkle_ver: crate::protocol::merkle::MERKLE_V2,
     })?;
 
     if !args.yes && !super::ui::confirm("Send now? [y/N] ")? {
@@ -258,8 +278,13 @@ pub async fn run(args: &StampArgs, verbose: bool, stagenet: bool) -> Result<()> 
         match daemon {
             Some(d) => {
                 let bar = super::ui::spinner("Checking chain...");
-                let chain_height =
-                    crate::wallet::daemon::confirm_commitment(&d, &tx_hash, &root).await;
+                let chain_height = crate::wallet::daemon::confirm_commitment_for_version(
+                    &d,
+                    &tx_hash,
+                    &commitment,
+                    Some(crate::protocol::merkle::MERKLE_V2),
+                )
+                .await;
                 super::ui::abandon(&bar);
                 match chain_height {
                     Ok(chain_height) => {
@@ -379,15 +404,16 @@ pub(crate) fn write_proofs(
     block_hash: &[u8; 32],
     out_dir: Option<&Path>,
 ) -> Result<()> {
-    let mut index_of: HashMap<[u8; 32], Vec<u64>> = HashMap::new();
+    // M6: one leaf per distinct hash; files with identical content share
+    // the same leaf_index.
+    let mut index_of: HashMap<[u8; 32], u64> = HashMap::new();
     for (i, h) in sorted.iter().enumerate() {
-        index_of.entry(*h).or_default().push(i as u64);
+        index_of.insert(*h, i as u64);
     }
-    let mut used: HashMap<[u8; 32], usize> = HashMap::new();
     for (h, path) in sorted_inputs {
-        let n = used.entry(*h).or_insert(0);
-        let leaf_index = index_of[h][*n];
-        *n += 1;
+        let leaf_index = *index_of
+            .get(h)
+            .ok_or_else(|| anyhow::anyhow!("Tree failed: file hash missing from deduped tree"))?;
         let _ = sorted;
         let siblings = tree
             .proof_for(leaf_index)

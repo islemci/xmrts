@@ -1,0 +1,27 @@
+{
+  "version": 2,
+  "hash_algo": "SHA-256 (0x01)",
+  "merkle_ver": "MERKLE_V2 (0x02)",
+  "note": "Same tree shape as v1 (duplicate-last-node). The chain commitment is size-bound: commit_root = SHA256(0x02 || tree_size_le_u64 || top_root). Proofs carry top_root; tx_extra carries commit_root.",
+  "commit_rule": "commit_root = SHA256(0x02 || tree_size_le_u64 || top_root)",
+  "trees": {
+    "one_leaf_empty": {
+      "top_root": "4e59bf27372b1304bc0b137d1be9d566ad58b154b6a6b5778af7f414b1d4b84c",
+      "tree_size": 1,
+      "commit_root": "98e9e065ef6e41e853d289024026a398443bca0b725f63fa4fa7983aa75a7d8c",
+      "extra_hex": "0228584d52545301010298e9e065ef6e41e853d289024026a398443bca0b725f63fa4fa7983aa75a7d8c"
+    },
+    "two_leaf_empty_abc": {
+      "top_root": "fb12d6ae208106a73219c7c61bcebf429a6d9ae5c1dc35159a205814458234c5",
+      "tree_size": 2,
+      "commit_root": "f7b559567cb6dc4eb9f30a1bb55f4a7bfb7e33cdd092d23b42aee591ac7d51c9",
+      "extra_hex": "0228584d525453010102f7b559567cb6dc4eb9f30a1bb55f4a7bfb7e33cdd092d23b42aee591ac7d51c9"
+    },
+    "three_leaf": {
+      "top_root": "6a1586e9c1be9e05ec67443d4a8eff58435c5aca55debd1535b3cb391f988d5c",
+      "tree_size": 3,
+      "commit_root": "18ae067c94fc9453c830f2ee9837ca7810a891f3fa1700772ea7d9f8d867750b",
+      "extra_hex": "0228584d52545301010218ae067c94fc9453c830f2ee9837ca7810a891f3fa1700772ea7d9f8d867750b"
+    }
+  }
+}

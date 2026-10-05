@@ -7,7 +7,7 @@
 
 use crate::protocol::commitment::{MAGIC, PROTOCOL_VERSION};
 use crate::protocol::hash::HASH_SHA256;
-use crate::protocol::merkle::{self, MERKLE_V1};
+use crate::protocol::merkle::{self, MERKLE_V1, MERKLE_V2};
 use thiserror::Error;
 
 pub const PROOF_MIN_LEN: usize = 165;
@@ -101,7 +101,7 @@ impl Proof {
     ) -> Result<Self, ProofError> {
         let p = Self {
             hash_algo: HASH_SHA256,
-            merkle_ver: MERKLE_V1,
+            merkle_ver: MERKLE_V2,
             network,
             file_hash,
             leaf_index,
@@ -193,7 +193,7 @@ impl Proof {
         if hash_algo != HASH_SHA256 {
             return Err(ProofError::UnknownHashAlgo(hash_algo));
         }
-        if merkle_ver != MERKLE_V1 {
+        if merkle_ver != MERKLE_V1 && merkle_ver != MERKLE_V2 {
             return Err(ProofError::UnknownMerkleVer(merkle_ver));
         }
         let network = Network::from_u8(network_id)?;
@@ -257,6 +257,12 @@ impl Proof {
         })
     }
 
+    /// The value the chain commitment must hold: V1 commits the raw root,
+    /// V2 commits the size-bound root (M6).
+    pub fn expected_commitment(&self) -> [u8; 32] {
+        merkle::commitment_for_version(&self.root, self.tree_size, self.merkle_ver)
+    }
+
     /// Verify the cryptographic path (file hash already checked by caller):
     /// recompute the root and compare.
     pub fn verify_merkle_path(&self) -> Result<(), ProofError> {
@@ -279,7 +285,15 @@ impl Proof {
             "hash_algo:     SHA-256 (0x{:02x})\n",
             self.hash_algo
         ));
-        s.push_str(&format!("merkle_ver:    v1 (0x{:02x})\n", self.merkle_ver));
+        let merkle_tag = match self.merkle_ver {
+            MERKLE_V1 => "v1",
+            MERKLE_V2 => "v2",
+            _ => "?",
+        };
+        s.push_str(&format!(
+            "merkle_ver:    {merkle_tag} (0x{:02x})\n",
+            self.merkle_ver
+        ));
         s.push_str(&format!("network:       {}\n", self.network.as_str()));
         s.push_str(&format!("file_hash:     {}\n", hex::encode(self.file_hash)));
         s.push_str(&format!("leaf_index:    {}\n", self.leaf_index));

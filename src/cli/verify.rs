@@ -170,10 +170,12 @@ async fn blockchain_check(
     // Full anchor check: commitment + exact height + block-hash match +
     // daemon nettype match (H1+M1). No wallet involved (M2): verification
     // depends only on the proof file, the original file, and daemon(s).
-    crate::wallet::daemon::verify_anchor(
+    // M6: the chain holds the size-bound commitment for V2 proofs.
+    crate::wallet::daemon::verify_anchor_for_version(
         &daemon,
         &txid_hex,
-        &proof.root,
+        &proof.expected_commitment(),
+        Some(proof.merkle_ver),
         proof.block_height,
         &proof.block_hash,
         proof.network.as_str(),

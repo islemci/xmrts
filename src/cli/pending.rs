@@ -10,6 +10,10 @@ use std::path::{Path, PathBuf};
 
 use crate::wallet::connection;
 
+fn default_merkle_ver() -> u8 {
+    crate::protocol::merkle::MERKLE_V1
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PendingOp {
     pub files: Vec<String>,
@@ -24,6 +28,10 @@ pub struct PendingOp {
     #[serde(default)]
     pub out_dir: Option<String>,
     pub network: String,
+    /// Merkle version used for the chain commitment (M6). Old pendings
+    /// predate the field and default to V1.
+    #[serde(default = "default_merkle_ver")]
+    pub merkle_ver: u8,
 }
 
 pub fn path_for_root(root_hex: &str) -> Option<PathBuf> {

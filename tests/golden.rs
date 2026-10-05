@@ -90,6 +90,36 @@ fn duplicate_hashes_get_distinct_leaves() {
 }
 
 #[test]
+fn v2_commitment_vectors() {
+    // tests/vectors/v2.json is normative for MERKLE_V2 (M6).
+    let text = std::fs::read_to_string("tests/vectors/v2.json").unwrap();
+    let v: serde_json::Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(v["version"], 2);
+    for (_name, t) in v["trees"].as_object().unwrap() {
+        let top: [u8; 32] = hex::decode(t["top_root"].as_str().unwrap())
+            .unwrap()
+            .try_into()
+            .unwrap();
+        let size = t["tree_size"].as_u64().unwrap();
+        let commit = xmrts::protocol::merkle::commit_root(&top, size);
+        assert_eq!(hex::encode(commit), t["commit_root"].as_str().unwrap());
+        assert_eq!(
+            xmrts::protocol::commitment::build_tx_extra_hex_for(&commit, 0x02),
+            t["extra_hex"].as_str().unwrap()
+        );
+    }
+}
+
+#[test]
+fn v2_sizes_commit_differently() {
+    // Same top root, different sizes -> different commitments.
+    let top = [0x77u8; 32];
+    let c3 = xmrts::protocol::merkle::commit_root(&top, 3);
+    let c4 = xmrts::protocol::merkle::commit_root(&top, 4);
+    assert_ne!(c3, c4);
+}
+
+#[test]
 fn proof_parser_rejects_garbage() {
     use xmrts::protocol::proof::Proof;
     assert!(Proof::from_bytes(&[]).is_err());

@@ -6,7 +6,7 @@
 //! `monero-wallet-rpc transfer` via its `extra` hex parameter.
 
 use crate::protocol::hash::HASH_SHA256;
-use crate::protocol::merkle::MERKLE_V1;
+use crate::protocol::merkle::{MERKLE_V1, MERKLE_V2};
 use thiserror::Error;
 
 /// ASCII "XMRTS".
@@ -39,21 +39,31 @@ pub struct Commitment {
     pub root: [u8; 32],
 }
 
-/// Build the 40-byte nonce payload for a Merkle root.
+/// Build the 40-byte nonce payload for a Merkle root (V1).
 pub fn build_nonce_payload(root: &[u8; 32]) -> [u8; NONCE_PAYLOAD_LEN] {
+    build_nonce_payload_for(root, MERKLE_V1)
+}
+
+/// Build the 40-byte nonce payload for a commitment root + merkle version.
+pub fn build_nonce_payload_for(root: &[u8; 32], merkle_ver: u8) -> [u8; NONCE_PAYLOAD_LEN] {
     let mut out = [0u8; NONCE_PAYLOAD_LEN];
     out[0..5].copy_from_slice(&MAGIC);
     out[5] = PROTOCOL_VERSION;
     out[6] = HASH_SHA256;
-    out[7] = MERKLE_V1;
+    out[7] = merkle_ver;
     out[8..40].copy_from_slice(root);
     out
 }
 
 /// Build the full 42-byte tx_extra field, hex-encoded for the wallet RPC
-/// `extra` parameter.
+/// `extra` parameter (V1).
 pub fn build_tx_extra_hex(root: &[u8; 32]) -> String {
-    let payload = build_nonce_payload(root);
+    build_tx_extra_hex_for(root, MERKLE_V1)
+}
+
+/// Version-parameterized variant (V2 stamps use `MERKLE_V2`).
+pub fn build_tx_extra_hex_for(root: &[u8; 32], merkle_ver: u8) -> String {
+    let payload = build_nonce_payload_for(root, merkle_ver);
     let mut field = Vec::with_capacity(TX_EXTRA_FIELD_LEN);
     field.push(TAG_NONCE);
     field.push(NONCE_PAYLOAD_LEN as u8); // 40 < 128: single-byte varint
@@ -81,7 +91,7 @@ pub fn parse_nonce_payload(bytes: &[u8]) -> Result<Commitment, CommitmentError> 
             "unknown hash algo {hash_algo:#04x}"
         )));
     }
-    if merkle_ver != MERKLE_V1 {
+    if merkle_ver != MERKLE_V1 && merkle_ver != MERKLE_V2 {
         return Err(CommitmentError::Malformed(format!(
             "unknown merkle version {merkle_ver:#04x}"
         )));

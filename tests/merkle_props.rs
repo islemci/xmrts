@@ -149,16 +149,27 @@ fn proof_bytes_round_trip_all_sizes() {
 }
 
 /// M6 regression: duplicate-last-node makes `[a,b,c]` and `[a,b,c,c]`
-/// share a root today. After the size-commitment fix the *committed*
-/// roots must differ. This test documents the collision; M6 must turn
-/// it into a `assert_ne!` on committed roots.
+/// share a raw root, but the size-committed roots must differ.
 #[test]
-fn duplicate_last_node_collides_today() {
+fn duplicate_last_node_committed_roots_differ() {
     let a = [0x11u8; 32];
     let b = [0x22u8; 32];
     let c = [0x33u8; 32];
     let (_, t3) = MerkleTree::build_from_unsorted(vec![a, b, c]).unwrap();
     let (_, t4) = MerkleTree::build_from_unsorted(vec![a, b, c, c]).unwrap();
-    // Raw roots collide today (documents the M6 weakness).
-    assert_eq!(t3.root(), t4.root(), "precondition: v1 roots collide");
+    // Raw roots still collide (same shape rule), documenting the weakness.
+    assert_eq!(t3.root(), t4.root(), "precondition: raw roots collide");
+    // Size-committed roots differ — this is what the chain commits (V2).
+    let commit3 = merkle::commit_root(&t3.root(), 3);
+    let commit4 = merkle::commit_root(&t4.root(), 4);
+    assert_ne!(commit3, commit4, "M6: committed roots must differ");
+    // commitment_for_version: V1 is identity, V2 is size-bound.
+    assert_eq!(
+        merkle::commitment_for_version(&t3.root(), 3, merkle::MERKLE_V1),
+        t3.root()
+    );
+    assert_eq!(
+        merkle::commitment_for_version(&t3.root(), 3, merkle::MERKLE_V2),
+        commit3
+    );
 }

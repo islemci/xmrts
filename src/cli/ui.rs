@@ -1,34 +1,52 @@
-//! Minimal terminal UI: semantic color + progress, restraint by default.
+//! Small terminal UI: color with meaning, progress with restraint.
 //!
 //! Rules:
-//! - Color carries meaning only: green ok, red failure, yellow pending /
-//!   warning. No decorative color.
-//! - Motion only for unknown durations (hashing, confirmation waits,
-//!   network fetches). Instant operations print plain lines.
-//! - Piped output and `NO_COLOR=1` degrade to today's plain text: spinners
-//!   are hidden off-TTY, and `console` strips color codes automatically.
+//! - Color means something only. Green is good. Red is bad.
+//!   Yellow is pending or a warning. Blue is info. Nothing decorative.
+//! - Short lines. Plain words. No em dashes.
+//! - Motion only for slow work like hashing or waiting for a block.
+//!   Fast work prints plain lines.
+//! - Piped output stays clean. Spinners hide off TTY. NO_COLOR strips color.
 
 use console::style;
 use indicatif::{ProgressBar, ProgressStyle};
 
-/// Green `✓ message`.
+/// Green check line. Use for done steps.
 pub fn ok(message: &str) {
     println!("{} {message}", style("✓").green().bold());
 }
 
-/// Red `✗ message`.
+/// Red cross line. Use for failures.
 pub fn fail(message: &str) {
     println!("{} {message}", style("✗").red().bold());
 }
 
-/// Yellow `○ message` (pending / skipped / informational-negative).
+/// Yellow circle line. Use for pending or skipped steps.
 pub fn note(message: &str) {
     println!("{} {message}", style("○").yellow());
 }
 
-/// Yellow `WARNING: message`.
+/// Blue info line. Use for helpful facts.
+pub fn info(message: &str) {
+    println!("{} {message}", style("ℹ").blue().bold());
+}
+
+/// Dim arrow line. Use for next steps.
+/// Example: hint("Next: run `xmrts wallet open`.")
+pub fn hint(message: &str) {
+    println!("{} {message}", style("→").dim());
+}
+
+/// Bold section title with a small icon.
+/// Example: header("◆", "Wallet")
+pub fn header(icon: &str, title: &str) {
+    println!();
+    println!("{} {}", style(icon).cyan().bold(), style(title).bold());
+}
+
+/// Yellow warning to stderr.
 pub fn warn(message: &str) {
-    eprintln!("{} {message}", style("WARNING:").yellow().bold());
+    eprintln!("{} {message}", style("!").yellow().bold());
 }
 
 /// Bold `label: value` line for summaries.
@@ -36,7 +54,7 @@ pub fn field(label: &str, value: &str) {
     println!("{} {value}", style(format!("{label}:")).bold());
 }
 
-/// Shorten a long address for display: first 5 + `....` + last 5.
+/// Shorten a long address for display: first 5 plus last 5.
 /// Short inputs pass through untouched.
 pub fn short_address(addr: &str) -> String {
     if addr.len() > 14 {
@@ -46,9 +64,9 @@ pub fn short_address(addr: &str) -> String {
     }
 }
 
-/// Fetch the fiat suffix for an amount when estimates are enabled
-/// (`setting set price true`). Returns `None` when disabled, and prints
-/// a one-line note (not an error) when the feed is unreachable.
+/// Fetch the fiat suffix for an amount when estimates are on
+/// (`setting set price true`). Returns `None` when off. Prints a short
+/// note when the price feed is down. Never fails the command.
 pub async fn fiat_for(
     atomic: u64,
     cfg: &crate::wallet::connection::WalletConfig,
@@ -60,13 +78,13 @@ pub async fn fiat_for(
     match crate::wallet::price::fiat_suffix(atomic, currency).await {
         Some(f) => Some(f),
         None => {
-            note("fiat estimate unavailable (price feed unreachable)");
+            note("Price feed is down. Showing XMR only.");
             None
         }
     }
 }
 
-/// Append a fiat suffix inline: `0.00003150 XMR (≈ 0.0153 EUR)`.
+/// Append a fiat suffix inline: `0.00003150 XMR (about 0.0153 EUR)`.
 pub fn with_fiat(xmr: &str, fiat: Option<String>) -> String {
     match fiat {
         Some(f) => format!("{xmr} ({f})"),
@@ -74,9 +92,7 @@ pub fn with_fiat(xmr: &str, fiat: Option<String>) -> String {
     }
 }
 
-/// Ping-pong asterisk frames: interpunct out through the teardrop
-/// asterisks and back. The loop seam restarts at `·`, so endpoints are
-/// listed once (no double-frame stutter).
+/// Ping pong spinner frames. Loops back cleanly with no stutter.
 fn tick_frames() -> &'static [&'static str] {
     &["·", "✢", "✳", "✶", "✻", "✽", "✻", "✶", "✳", "✢"]
 }
@@ -94,8 +110,8 @@ fn styled_bytes() -> ProgressStyle {
         .progress_chars("##-")
 }
 
-/// A spinner for an unknown-duration task. Hidden (no-op) off-TTY so
-/// piped output stays clean. Finish with [`done`] or [`abandon`].
+/// A spinner for slow work. Hidden off TTY so pipes stay clean.
+/// Finish with [`done`] or [`abandon`].
 pub fn spinner(message: &str) -> ProgressBar {
     if !console::Term::stderr().is_term() {
         return ProgressBar::hidden();
@@ -107,7 +123,7 @@ pub fn spinner(message: &str) -> ProgressBar {
     bar
 }
 
-/// A byte progress bar of known total. Hidden off-TTY.
+/// A byte progress bar of known total. Hidden off TTY.
 pub fn bytes_bar(message: &str, total_bytes: u64) -> ProgressBar {
     if !console::Term::stderr().is_term() {
         return ProgressBar::hidden();
@@ -118,23 +134,26 @@ pub fn bytes_bar(message: &str, total_bytes: u64) -> ProgressBar {
     bar
 }
 
-/// Finish a spinner/bar with a green check line.
+/// Finish a spinner or bar with a green check line.
 pub fn done(bar: &ProgressBar, message: &str) {
     bar.finish_and_clear();
     ok(message);
 }
 
-/// Abandon a spinner/bar without a verdict (caller prints its own).
+/// Stop a spinner or bar with no verdict. Caller prints its own line.
 pub fn abandon(bar: &ProgressBar) {
     bar.finish_and_clear();
 }
 
-/// Read one keypress without requiring Enter. Returns the character, or
-/// `None` for Enter / Escape / anything non-character. Falls back to a
-/// line read when stdin is not a terminal (piped input, tests).
+/// True when both stdin and stderr are terminals. Use to decide if a
+/// prompt makes sense or if we should print plain steps instead.
+pub fn is_interactive() -> bool {
+    console::Term::stderr().is_term()
+}
+
+/// Read one keypress without needing Enter. Returns the key, or `None`
+/// for Enter or Escape. Reads one line when input is piped.
 fn read_key() -> Option<char> {
-    // NB: read_key always reads stdin; the Term only decides echo/output.
-    // stderr keeps the prompt line intact when stdout is piped.
     let term = console::Term::stderr();
     if !term.is_term() {
         let mut line = String::new();
@@ -145,7 +164,6 @@ fn read_key() -> Option<char> {
     }
     match term.read_key() {
         Ok(console::Key::Char(c)) => {
-            // read_key doesn't echo: show what was pressed.
             println!("{c}");
             Some(c)
         }
@@ -153,7 +171,6 @@ fn read_key() -> Option<char> {
             println!();
             None
         }
-        // Escape, arrows, unknown keys: treat as "no choice".
         _ => {
             println!();
             None
@@ -161,8 +178,8 @@ fn read_key() -> Option<char> {
     }
 }
 
-/// Yes/no prompt answered by a single keypress (`y` = yes, Enter = default
-/// no). `prompt` is printed as-is, e.g. `"Broadcast transaction? [y/N] "`.
+/// Yes or no prompt with one keypress. `y` means yes. Enter means no.
+/// Print the prompt as is, like `"Send now? [y/N] "`.
 pub fn confirm(prompt: &str) -> anyhow::Result<bool> {
     use std::io::Write;
     print!("{prompt}");
@@ -173,8 +190,8 @@ pub fn confirm(prompt: &str) -> anyhow::Result<bool> {
     }
 }
 
-/// Numbered choice answered by a single digit keypress (`1`-`9`), Enter
-/// for `default` (0-based index). Retries invalid keys.
+/// Numbered choice with one keypress (`1` to `9`). Enter picks `default`.
+/// Keeps asking until the key is valid.
 pub fn choose_number(prompt: &str, count: usize, default: usize) -> anyhow::Result<usize> {
     use std::io::Write;
     loop {
@@ -187,9 +204,9 @@ pub fn choose_number(prompt: &str, count: usize, default: usize) -> anyhow::Resu
                 if n >= 1 && n <= count {
                     return Ok(n - 1);
                 }
-                println!("Enter 1–{count}.");
+                println!("Pick 1 to {count}.");
             }
-            _ => println!("Enter 1–{count}."),
+            _ => println!("Pick 1 to {count}."),
         }
     }
 }

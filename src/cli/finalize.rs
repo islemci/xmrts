@@ -1,9 +1,5 @@
-//! `xmrts finalize` — finish a pending stamp into anchored proofs.
-//!
-//! Used when the transaction confirmed after `stamp` gave up waiting
-//! (slow blocks, remote-daemon lag): re-checks confirmation, re-checks
-//! the on-chain commitment bytes, re-hashes the files, and writes the
-//! anchored `.xmrts` proofs. No new transaction, no new fee.
+//! `xmrts finalize`. Turns pending stamps into anchored proofs.
+//! Use after slow blocks. No new tx. No new fee.
 
 use anyhow::{Context, Result};
 use clap::Args;
@@ -18,23 +14,25 @@ use crate::wallet::connection;
 
 #[derive(Debug, Args)]
 pub struct FinalizeArgs {
-    /// Pending file to finalize (default: auto-select when exactly one exists).
+    /// Pending file to finish (picks the only one when empty).
     pub pending: Option<PathBuf>,
-    /// Daemon endpoint override for the on-chain checks.
+    /// Daemon address for chain checks.
     #[arg(long)]
     pub daemon: Option<String>,
 }
 
 pub async fn run(args: &FinalizeArgs, verbose: bool, stagenet: bool) -> Result<()> {
     let _ = verbose;
+    let _ = connection::ensure_dirs();
+    super::ui::header("◆", "Finalize");
     let pending_path = match &args.pending {
         Some(p) => p.clone(),
         None => match pending::list().as_slice() {
-            [] => anyhow::bail!("nothing pending (no files in the pending directory)"),
+            [] => anyhow::bail!("Nothing pending. No files wait."),
             [only] => only.clone(),
             many => {
                 anyhow::bail!(
-                    "several pending operations; specify one:\n{}",
+                    "Many pendings. Name one:\n{}",
                     many.iter()
                         .map(|p| format!("  {}", p.display()))
                         .collect::<Vec<_>>()
@@ -45,18 +43,16 @@ pub async fn run(args: &FinalizeArgs, verbose: bool, stagenet: bool) -> Result<(
     };
     let op = pending::load(&pending_path)?;
     if op.txid.is_empty() {
-        anyhow::bail!(
-            "pending operation was never relayed (no txid); re-run `xmrts stamp` instead"
-        );
+        anyhow::bail!("This pending never sent (no txid). Run `xmrts stamp` again");
     }
     let root: [u8; 32] = hex::decode(&op.root)
-        .context("bad root in pending file")?
+        .context("Pending file holds a bad root")?
         .try_into()
-        .map_err(|_| anyhow::anyhow!("bad root length in pending file"))?;
+        .map_err(|_| anyhow::anyhow!("Pending file holds a short root"))?;
     let network =
-        Network::from_str(&op.network).map_err(|e| anyhow::anyhow!("bad network: {e}"))?;
+        Network::from_str(&op.network).map_err(|e| anyhow::anyhow!("Bad network: {e}"))?;
     if stagenet && network != Network::Stagenet {
-        anyhow::bail!("pending operation is for {}, not stagenet", op.network);
+        anyhow::bail!("This pending is for {}, not stagenet", op.network);
     }
 
     let cfg = connection::load_config();
@@ -64,37 +60,26 @@ pub async fn run(args: &FinalizeArgs, verbose: bool, stagenet: bool) -> Result<(
         .daemon
         .clone()
         .or(cfg.daemon_endpoint.clone())
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "no daemon endpoint configured; set one with `xmrts connect --daemon <url>`"
-            )
-        })?;
-    // 1. Chain confirmation + commitment bytes (same honesty rule as stamp).
-    let bar = super::ui::spinner("Checking on-chain commitment…");
+        .ok_or_else(|| anyhow::anyhow!("No daemon set. Run `xmrts connect --daemon <url>`"))?;
+    let bar = super::ui::spinner("Checking chain...");
     let height = crate::wallet::daemon::confirm_commitment(&daemon, &op.txid, &root).await;
     super::ui::abandon(&bar);
-    let height = height.map_err(|e| anyhow::anyhow!("not yet finalizable: {e}"))?;
-    super::ui::ok(&format!(
-        "Transaction {} confirmed in block {height}",
-        op.txid
-    ));
-    super::ui::ok("Commitment confirmed on chain");
+    let height = height.map_err(|e| anyhow::anyhow!("Not ready yet: {e}"))?;
+    super::ui::ok(&format!("Tx {} sits in block {height}.", op.txid));
+    super::ui::ok("Chain holds your mark.");
     let block_hash = match crate::wallet::daemon::block_hash(&daemon, height).await {
         Ok(h) => h,
         Err(e) => {
-            super::ui::warn(&format!(
-                "block hash lookup failed ({e}); proofs carry zeroed block hash"
-            ));
+            super::ui::warn(&format!("Block hash missed ({e}). Proofs carry zeros"));
             [0u8; 32]
         }
     };
 
-    // 2. Re-hash the files; the set must be unchanged since stamp.
     let mut pairs: Vec<([u8; 32], PathBuf)> = Vec::new();
     for f in &op.files {
         let path = Path::new(f);
-        let h = hash::hash_file(path)
-            .with_context(|| format!("hashing {f} (file changed or unreadable?)"))?;
+        let h =
+            hash::hash_file(path).with_context(|| format!("Reading {f} (moved or changed?)"))?;
         pairs.push((h, path.to_path_buf()));
     }
     pairs.sort_by_key(|(h, _)| *h);
@@ -104,21 +89,20 @@ pub async fn run(args: &FinalizeArgs, verbose: bool, stagenet: bool) -> Result<(
     let mut recomputed_sorted = recomputed.clone();
     recomputed_sorted.sort();
     if recomputed_sorted != stored {
-        anyhow::bail!("files changed since stamp (hash set differs); cannot finalize safely");
+        anyhow::bail!("Files changed since stamp. Cannot finish safely");
     }
     let file_hashes: Vec<[u8; 32]> = pairs.iter().map(|(h, _)| *h).collect();
-    let (sorted, tree) =
-        MerkleTree::build_from_unsorted(file_hashes).map_err(|e| anyhow::anyhow!("merkle: {e}"))?;
+    let (sorted, tree) = MerkleTree::build_from_unsorted(file_hashes)
+        .map_err(|e| anyhow::anyhow!("Tree failed: {e}"))?;
     if tree.root() != root {
-        anyhow::bail!("recomputed root differs from pending record; cannot finalize safely");
+        anyhow::bail!("Root changed. Cannot finish safely");
     }
     let txid_bytes: [u8; 32] = hex::decode(&op.txid)
-        .context("bad txid in pending file")?
+        .context("Pending file holds a bad txid")?
         .try_into()
-        .map_err(|_| anyhow::anyhow!("bad txid length in pending file"))?;
+        .map_err(|_| anyhow::anyhow!("Pending file holds a short txid"))?;
     let out_dir = op.out_dir.as_ref().map(PathBuf::from);
 
-    // 3. Write anchored proofs (reuse stamp's writer).
     stamp::write_proofs(
         &pairs,
         &sorted,
@@ -132,9 +116,9 @@ pub async fn run(args: &FinalizeArgs, verbose: bool, stagenet: bool) -> Result<(
     let _ = std::fs::remove_file(&pending_path);
     println!();
     super::ui::ok(&format!(
-        "Finalized {} proof(s) at block {height}",
+        "Done. {} proof(s) at block {height}.",
         pairs.len()
     ));
-    println!("Meaning: the files existed no later than block {height}.");
+    println!("Files lived no later than block {height}.");
     Ok(())
 }

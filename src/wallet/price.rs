@@ -2,7 +2,7 @@
 //!
 //! Enable with `xmrts setting set price true`, pick any 3-letter fiat
 //! with `xmrts setting set currency eur` (default USD). A failed price
-//! fetch degrades to XMR-only display — it never fails the operation.
+//! fetch degrades to XMR-only display - it never fails the operation.
 
 use thiserror::Error;
 

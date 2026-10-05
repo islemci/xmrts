@@ -1,4 +1,4 @@
-//! `xmrts setting` — read and modify config from the CLI.
+//! `xmrts setting`. View and change settings.
 //!
 //! ```text
 //! xmrts setting list
@@ -8,10 +8,10 @@
 //! xmrts setting unset daemon
 //! ```
 //!
-//! The wallet RPC *login* password is deliberately not settable here:
-//! `setting set` would leak it into shell history. Use
-//! `xmrts connect --username USER --password PASS --save-auth`.
-//! Passwords are never printed (shown as `<hidden>`).
+//! Wallet login password stays out of here.
+//! Setting it here would leak it to shell history. Use
+//! `xmrts connect --username YOU --password PASS --save-auth`.
+//! Passwords show as hidden. Never printed.
 
 use anyhow::Result;
 use clap::{Args, Subcommand};
@@ -26,24 +26,24 @@ pub struct SettingArgs {
 
 #[derive(Debug, Subcommand)]
 pub enum SettingCommand {
-    /// Show all settings (password never printed).
+    /// Show all settings (password stays hidden).
     List,
     /// Show one setting.
     Get {
-        /// Setting name: price, currency, endpoint, daemon, network,
+        /// Name: price, currency, endpoint, daemon, network,
         /// wallet-dir, wallet-rpc-path, username
         key: String,
     },
     /// Change one setting.
     Set {
-        /// Setting name (see get).
+        /// Name (see get).
         key: String,
         /// New value.
         value: String,
     },
-    /// Clear an optional setting back to unset.
+    /// Clear an optional setting.
     Unset {
-        /// Setting name: currency, daemon, wallet-dir, wallet-rpc-path, username
+        /// Name: currency, daemon, wallet-dir, wallet-rpc-path, username
         key: String,
     },
 }
@@ -56,22 +56,22 @@ fn describe(cfg: &WalletConfig, key: &str) -> Result<String> {
         "daemon" => cfg
             .daemon_endpoint
             .clone()
-            .unwrap_or_else(|| "(unset)".to_string()),
+            .unwrap_or_else(|| "(empty)".to_string()),
         "network" => cfg.network.clone(),
         "wallet-dir" => cfg
             .wallet_dir
             .clone()
-            .unwrap_or_else(|| "(unset)".to_string()),
+            .unwrap_or_else(|| "(empty)".to_string()),
         "wallet-rpc-path" => cfg
             .wallet_rpc_path
             .clone()
-            .unwrap_or_else(|| "(autodetect)".to_string()),
+            .unwrap_or_else(|| "(auto)".to_string()),
         "username" => cfg
             .username
             .clone()
-            .unwrap_or_else(|| "(unset)".to_string()),
+            .unwrap_or_else(|| "(empty)".to_string()),
         "password" => "(hidden)".to_string(),
-        _ => anyhow::bail!("unknown setting '{key}'"),
+        _ => anyhow::bail!("Unknown setting '{key}'. Try `xmrts setting list`"),
     })
 }
 
@@ -79,35 +79,35 @@ fn apply_set(cfg: &mut WalletConfig, key: &str, value: &str) -> Result<()> {
     match key {
         "price" => {
             cfg.price = value.parse().map_err(|_| {
-                anyhow::anyhow!("price wants true/false, got '{value}'")
+                anyhow::anyhow!("Price wants true or false. Got '{value}'")
             })?;
         }
         "currency" => {
             if !crate::wallet::price::is_valid_currency(value) {
-                anyhow::bail!("currency wants 3 letters (e.g. usd), got '{value}'");
+                anyhow::bail!("Currency wants 3 letters like usd. Got '{value}'");
             }
             cfg.currency = Some(value.to_ascii_lowercase());
         }
         "endpoint" => {
             cfg.endpoint = value.to_string();
             cfg.validate()
-                .map_err(|e| anyhow::anyhow!("rejected: {e}"))?;
+                .map_err(|e| anyhow::anyhow!("Not using that: {e}"))?;
         }
         "daemon" => {
             cfg.daemon_endpoint = Some(value.to_string());
         }
         "network" => {
             crate::protocol::proof::Network::from_str(value)
-                .map_err(|e| anyhow::anyhow!("rejected: {e}"))?;
+                .map_err(|e| anyhow::anyhow!("Not using that: {e}"))?;
             cfg.network = value.to_ascii_lowercase();
         }
         "wallet-dir" => cfg.wallet_dir = Some(value.to_string()),
         "wallet-rpc-path" => cfg.wallet_rpc_path = Some(value.to_string()),
         "username" => cfg.username = Some(value.to_string()),
         "password" => anyhow::bail!(
-            "refusing: `setting set` would leak the password into shell history.\nUse `xmrts connect --username USER --password PASS --save-auth` instead."
+            "Use connect for passwords.\nRun `xmrts connect --username YOU --password PASS --save-auth`"
         ),
-        _ => anyhow::bail!("unknown setting '{key}'"),
+        _ => anyhow::bail!("Unknown setting '{key}'. Try `xmrts setting list`"),
     }
     Ok(())
 }
@@ -123,17 +123,19 @@ fn apply_unset(cfg: &mut WalletConfig, key: &str) -> Result<()> {
             cfg.password = None;
         }
         "price" | "endpoint" | "network" => {
-            anyhow::bail!("'{key}' is required and cannot be unset")
+            anyhow::bail!("'{key}' must stay set. Cannot clear it")
         }
-        _ => anyhow::bail!("unknown setting '{key}'"),
+        _ => anyhow::bail!("Unknown setting '{key}'. Try `xmrts setting list`"),
     }
     Ok(())
 }
 
 pub fn run(args: &SettingArgs) -> Result<()> {
+    let _ = connection::ensure_dirs();
     let mut cfg = connection::load_config();
     match &args.command {
         SettingCommand::List => {
+            super::ui::header("◆", "Settings");
             for key in [
                 "price",
                 "currency",
@@ -145,7 +147,7 @@ pub fn run(args: &SettingArgs) -> Result<()> {
                 "username",
                 "password",
             ] {
-                println!("{key} = {}", describe(&cfg, key)?);
+                super::ui::field(key, &describe(&cfg, key)?);
             }
         }
         SettingCommand::Get { key } => {
@@ -154,14 +156,14 @@ pub fn run(args: &SettingArgs) -> Result<()> {
         SettingCommand::Set { key, value } => {
             apply_set(&mut cfg, key, value)?;
             let saved = connection::save_config(&cfg)?;
-            println!("{key} = {}", describe(&cfg, key)?);
-            println!("Saved {}", saved.display());
+            super::ui::ok(&format!("{key} is now {}", describe(&cfg, key)?));
+            super::ui::hint(&format!("Saved to {}", saved.display()));
         }
         SettingCommand::Unset { key } => {
             apply_unset(&mut cfg, key)?;
             let saved = connection::save_config(&cfg)?;
-            println!("{key} = {}", describe(&cfg, key)?);
-            println!("Saved {}", saved.display());
+            super::ui::ok(&format!("{key} cleared."));
+            super::ui::hint(&format!("Saved to {}", saved.display()));
         }
     }
     Ok(())

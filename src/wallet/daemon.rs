@@ -89,7 +89,7 @@ impl DaemonClient {
 }
 
 /// Fetch the block hash for a height (for proof anchoring; warns to
-/// zeros when unavailable — height is the load-bearing field).
+/// zeros when unavailable - height is the load-bearing field).
 pub async fn block_hash(daemon_endpoint: &str, height: u64) -> Result<[u8; 32], DaemonError> {
     let url = format!("{}/json_rpc", daemon_endpoint.trim_end_matches('/'));
     let client = reqwest::Client::builder()

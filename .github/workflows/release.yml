@@ -78,6 +78,19 @@ jobs:
             "$MONERO_TAG" "$MONERO_PATCH" "$RUNNER_TEMP/monero-build"
           cp "$RUNNER_TEMP/monero-build/build/release/bin/monero-wallet-rpc" .
 
+      # Diagnostics for the Boost.Locale silent skip (darwin cross):
+      # dumps b2's verbatim has_iconv check command + staged lib listing.
+      - name: Dump Boost config log on failure
+        if: failure()
+        run: |
+          find $RUNNER_TEMP/monero-build/contrib/depends/work/build \
+            -path "*boost*" -name config.log | head -3 | \
+            xargs grep -B3 -A30 -i "has_iconv" 2>/dev/null | head -90 || true
+          find $RUNNER_TEMP/monero-build/contrib/depends/work/build \
+            -path "*boost*" -name user-config.jam -exec cat {} \; | head -10 || true
+          ls $RUNNER_TEMP/monero-build/contrib/depends/*/lib/ 2>/dev/null \
+            | grep -i "boost.*locale\|boost.*filesystem" | head -10 || true
+
       - name: Upload wallet binary
         uses: actions/upload-artifact@v4
         with:

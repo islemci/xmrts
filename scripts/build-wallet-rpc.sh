@@ -103,11 +103,6 @@ BOOST_MK="$WORK/contrib/depends/packages/boost.mk"
 perl -pi -e 's/^\$\(package\)_version=.*$/\$(package)_version='"$BOOST_VERSION"'/' "$BOOST_MK"
 perl -pi -e 's/^\$\(package\)_sha256_hash=.*$/\$(package)_sha256_hash='"$BOOST_SHA256"'/' "$BOOST_MK"
 perl -pi -e 's/^\$\(package\)_cxxflags=-std=c\+\+11$/\$(package)_cxxflags=-std=c++17/' "$BOOST_MK"
-# The 1.69-era b2 patches (fix_aroptions, fix_arm_arch) predate fixes
-# absorbed into modern Boost.Build — upstream dropped them when moving
-# past 1.69, and they neither apply nor are needed on 1.84+. Empty the
-# list and neutralize the hardcoded invocations in preprocess_cmds.
-# (perl, not sed -i: portable across GNU/BSD.)
 # The 1.69-era b2 patches predate fixes absorbed into modern Boost.Build
 # (upstream dropped them when moving past 1.69): they neither apply to
 # nor are needed on 1.84+, so empty the list and neutralize the
@@ -117,6 +112,15 @@ perl -pi -e 's/^\$\(package\)_patches=.*$/\$(package)_patches=/' "$BOOST_MK"
 # them the three lines stop forming one logical recipe line and make
 # dies with "missing separator" at funcs.mk eval time.
 perl -0777 -pi -e 's/^  patch -p1 < .*fix_ar(options|m_arch)\.patch &&\\\n/  true \&\&\\\n/gm' "$BOOST_MK"
+# Boost.Locale is dead weight with a broken build: upstream removed it as
+# a required dependency on all non-Windows platforms (the only two call
+# sites in 0.18.5 are already #ifdef WIN32-guarded; POSIX handles UTF-8
+# natively). Mirror that: drop locale from the b2 build list and from
+# CMake's required components. No source changes, no behavior change.
+# (Windows/mingw32 would need it re-added, exactly as upstream does.)
+perl -pi -e 's/^(\$\(package\)_config_libraries=.*regex,serialization),locale$/$1/' "$BOOST_MK"
+perl -pi -e 's/^(  set\(BOOST_COMPONENTS [^)]*) locale\)$/$1)/' "$WORK/CMakeLists.txt"
+grep -E "\(package\)_config_libraries=|set\(BOOST_COMPONENTS" "$BOOST_MK" "$WORK/CMakeLists.txt"
 grep -E "\(package\)_(version|sha256_hash|patches)=|\(package\)_cxxflags=-std" "$BOOST_MK"
 
 # ZeroMQ: 4.3.4 trips -Werror on sprintf deprecation under the Xcode

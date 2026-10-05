@@ -74,23 +74,26 @@ pub fn save(op: &PendingOp) -> Result<PathBuf> {
     let Some(dir) = connection::pending_dir() else {
         anyhow::bail!("no config dir");
     };
-    std::fs::create_dir_all(&dir)?;
+    let _ = connection::ensure_dirs();
+    let _ = &dir;
     let path = path_for_root(&op.root).ok_or_else(|| anyhow::anyhow!("no config dir"))?;
-    std::fs::write(&path, serde_json::to_string_pretty(op)?)?;
+    // Atomic + owner-only: crash-safe recovery record (M3). Holds tx
+    // metadata and the list of stamped file paths.
+    connection::atomic_write_0600(&path, serde_json::to_string_pretty(op)?.as_bytes())?;
     Ok(path)
 }
 
 /// Record the relayed txid in the pending file, so a crash between relay
 /// and proof-writing still leaves the files→root→transaction link behind.
-pub fn update_txid(path: &Path, txid: &str) {
-    let Ok(text) = std::fs::read_to_string(path) else {
-        return;
-    };
-    let Ok(mut v) = serde_json::from_str::<serde_json::Value>(&text) else {
-        return;
-    };
+/// Returns an error instead of swallowing it (M3): callers surface it as a
+/// warning.
+pub fn update_txid(path: &Path, txid: &str) -> Result<()> {
+    let text =
+        std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+    let mut v: serde_json::Value =
+        serde_json::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
     v["txid"] = serde_json::Value::String(txid.to_string());
-    if let Ok(out) = serde_json::to_string_pretty(&v) {
-        let _ = std::fs::write(path, out);
-    }
+    let out = serde_json::to_string_pretty(&v)?;
+    connection::atomic_write_0600(path, out.as_bytes())?;
+    Ok(())
 }

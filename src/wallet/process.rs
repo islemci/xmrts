@@ -222,6 +222,14 @@ pub fn resolve(cfg: &WalletConfig) -> Result<SidecarConfig, ProcessError> {
 
 impl SidecarConfig {
     /// Real argv for spawning (contains the RPC password when configured).
+    ///
+    /// Known exposure (M3): the password travels as `--rpc-login=user:pass`
+    /// on the child command line, readable by other local users via `ps` /
+    /// `/proc/<pid>/cmdline` while the sidecar lives. The pinned
+    /// monero-wallet-rpc build has no `--config-file` path for `rpc-login`,
+    /// so argv is currently the only transport. Mitigations in place:
+    /// loopback-only bind, 0600 config file, redacted display argv. Treat
+    /// any local user as able to call the wallet RPC while it runs.
     pub fn spawn_args(&self) -> Vec<String> {
         let mut args = vec![
             format!("--wallet-dir={}", self.wallet_dir),

@@ -233,7 +233,9 @@ pub async fn run(args: &StampArgs, verbose: bool, stagenet: bool) -> Result<()> 
         let h = transaction::relay(&client, &tx_hex)
             .await
             .map_err(|e| anyhow::anyhow!("Send failed: {e}"))?;
-        pending::update_txid(&pending_path, &h);
+        if let Err(e) = pending::update_txid(&pending_path, &h) {
+            super::ui::warn(&format!("Relayed but pending record update failed: {e}"));
+        }
         h
     };
     println!();

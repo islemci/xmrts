@@ -143,17 +143,84 @@ pub fn pending_dir() -> Option<PathBuf> {
     config_dir().map(|d| d.join("pending"))
 }
 
-/// Create config and pending dirs when missing. Safe to call often.
-/// Returns the config dir.
+/// Create config and pending dirs when missing (mode 0700 on Unix).
+/// Safe to call often. Returns the config dir.
 pub fn ensure_dirs() -> anyhow::Result<PathBuf> {
     let Some(dir) = config_dir() else {
         anyhow::bail!("could not find a config folder on this system");
     };
-    std::fs::create_dir_all(&dir)?;
+    create_dir_0700(&dir)?;
     if let Some(pending) = pending_dir() {
-        std::fs::create_dir_all(&pending)?;
+        create_dir_0700(&pending)?;
     }
     Ok(dir)
+}
+
+#[cfg(unix)]
+fn create_dir_0700(dir: &std::path::Path) -> std::io::Result<()> {
+    use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+    let mut b = std::fs::DirBuilder::new();
+    b.recursive(true).mode(0o700);
+    let _ = b.create(dir);
+    // Harden pre-existing dirs too (cheap, idempotent).
+    let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700));
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn create_dir_0700(dir: &std::path::Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dir)
+}
+
+/// Atomic owner-only file write (M3): temp file with mode 0600 at creation
+/// (no umask race), `fsync`, then `rename`. The temp file lives in the same
+/// directory so the rename is atomic on one filesystem.
+pub fn atomic_write_0600(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    let Some(parent) = path.parent() else {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "no parent dir",
+        ));
+    };
+    std::fs::create_dir_all(parent)?;
+    let tmp = parent.join(format!(
+        ".tmp-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    ));
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&tmp)?;
+        f.write_all(bytes)?;
+        f.sync_all()?;
+        drop(f);
+        let _ = std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600));
+    }
+    #[cfg(not(unix))]
+    {
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&tmp)?;
+        f.write_all(bytes)?;
+        f.sync_all()?;
+        drop(f);
+    }
+    std::fs::rename(&tmp, path)?;
+    // Best-effort dir fsync so the rename survives a crash.
+    if let Ok(d) = std::fs::File::open(parent) {
+        let _ = d.sync_all();
+    }
+    Ok(())
 }
 
 pub fn load_config() -> WalletConfig {
@@ -171,16 +238,11 @@ pub fn save_config(cfg: &WalletConfig) -> Result<PathBuf, ConnectionError> {
     let Some(dir) = config_dir() else {
         return Err(ConnectionError::Config("no config dir".into()));
     };
-    std::fs::create_dir_all(&dir)?;
+    create_dir_0700(&dir).map_err(ConnectionError::Io)?;
     let path = dir.join("config.toml");
     let text = toml::to_string_pretty(cfg).map_err(|e| ConnectionError::Config(e.to_string()))?;
-    std::fs::write(&path, text)?;
-    // The file may hold an RPC password: restrict to owner-only on Unix.
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
-    }
+    // Owner-only from creation: no umask race window (M3).
+    atomic_write_0600(&path, text.as_bytes()).map_err(ConnectionError::Io)?;
     Ok(path)
 }
 
@@ -211,5 +273,25 @@ mod tests {
             ..WalletConfig::default()
         };
         assert!(!cfg.is_remote());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn atomic_write_is_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("secret.toml");
+        atomic_write_0600(&path, b"password = 1").unwrap();
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(
+            mode, 0o600,
+            "config/pending files must be 0600, got {mode:o}"
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), b"password = 1");
+        // Overwrite stays atomic + 0600.
+        atomic_write_0600(&path, b"password = 2").unwrap();
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+        assert_eq!(std::fs::read(&path).unwrap(), b"password = 2");
     }
 }

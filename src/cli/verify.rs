@@ -21,10 +21,16 @@ pub struct VerifyArgs {
     /// Daemon address for tx lookup.
     #[arg(long)]
     pub daemon: Option<String>,
+    /// Machine-readable JSON on stdout (human lines suppressed).
+    #[arg(long)]
+    pub json: bool,
 }
 
 pub async fn run(args: &VerifyArgs, verbose: bool, stagenet: bool) -> Result<()> {
     let ok = true;
+    if args.json {
+        super::ui::set_quiet(true);
+    }
     let raw =
         std::fs::read(&args.proof).with_context(|| format!("Reading {}", args.proof.display()))?;
     let proof = match Proof::from_bytes(&raw) {
@@ -35,12 +41,14 @@ pub async fn run(args: &VerifyArgs, verbose: bool, stagenet: bool) -> Result<()>
         }
         Err(e) => {
             super::ui::fail("Check failed.");
-            println!();
-            println!("Why:\nProof file is broken: {e}");
-            fail_exit();
+            if !args.json {
+                println!();
+                println!("Why:\nProof file is broken: {e}");
+            }
+            fail_exit_json(args.json, &format!("proof file is broken: {e}"));
         }
     };
-    if verbose {
+    if verbose && !args.json {
         println!();
         print!("{}", proof.describe());
         println!();
@@ -52,40 +60,68 @@ pub async fn run(args: &VerifyArgs, verbose: bool, stagenet: bool) -> Result<()>
         super::ui::ok("File hash matches.");
     } else {
         super::ui::fail("Check failed.");
-        println!();
-        println!("Why:\nFile differs from what the proof holds.");
-        println!("got:  {}", hex::encode(file_hash));
-        println!("proof: {}", hex::encode(proof.file_hash));
-        fail_exit();
+        if !args.json {
+            println!();
+            println!("Why:\nFile differs from what the proof holds.");
+            println!("got:  {}", hex::encode(file_hash));
+            println!("proof: {}", hex::encode(proof.file_hash));
+        }
+        fail_exit_json(args.json, "file differs from what the proof holds");
     }
 
     match proof.verify_merkle_path() {
         Ok(()) => super::ui::ok("Tree path is valid."),
         Err(e) => {
             super::ui::fail("Check failed.");
-            println!();
-            println!("Why:\nTree path misses the root: {e}");
-            fail_exit();
+            if !args.json {
+                println!();
+                println!("Why:\nTree path misses the root: {e}");
+            }
+            fail_exit_json(args.json, &format!("tree path misses the root: {e}"));
         }
     }
 
     if proof.is_pending() {
         if args.offline {
             super::ui::note("Proof is pending. Crypto passed. No block yet.");
-            println!();
-            println!("Not anchored yet. Run `xmrts stamp` without --offline.");
+            if !args.json {
+                println!();
+                println!("Not anchored yet. Run `xmrts stamp` without --offline.");
+            }
+            if args.json {
+                print_json(&serde_json::json!({
+                    "ok": true, "anchored": false,
+                    "file_hash": hex::encode(file_hash),
+                    "root": hex::encode(proof.root),
+                    "network": proof.network.as_str(),
+                }));
+            }
             return Ok(());
         }
         super::ui::note("Proof is pending. No block or tx saved.");
-        println!();
-        println!("Not verified. Run `xmrts stamp` without --offline.");
-        fail_exit();
+        if !args.json {
+            println!();
+            println!("Not verified. Run `xmrts stamp` without --offline.");
+        }
+        fail_exit_json(args.json, "proof is pending: no block yet");
     }
 
     if args.offline {
         super::ui::note("Skipped chain lookup (--offline).");
-        println!();
-        println!("Crypto passed. Chain not checked.");
+        if !args.json {
+            println!();
+            println!("Crypto passed. Chain not checked.");
+        }
+        if args.json {
+            print_json(&serde_json::json!({
+                "ok": true, "anchored": false, "chain_checked": false,
+                "file_hash": hex::encode(file_hash),
+                "root": hex::encode(proof.root),
+                "txid": hex::encode(proof.txid),
+                "block_height": proof.block_height,
+                "network": proof.network.as_str(),
+            }));
+        }
         return Ok(());
     }
 
@@ -95,31 +131,33 @@ pub async fn run(args: &VerifyArgs, verbose: bool, stagenet: bool) -> Result<()>
     match checked {
         Ok((anchor, daemon_used)) => {
             // L2+UX1: lead with time, then list what was trusted.
-            println!();
-            if anchor.block_timestamp > 0 {
+            if !args.json {
+                println!();
+                if anchor.block_timestamp > 0 {
+                    println!(
+                        "No later than {} (block {}, {} confirmations).",
+                        crate::wallet::daemon::format_block_time(anchor.block_timestamp),
+                        anchor.height,
+                        anchor.confirmations
+                    );
+                } else {
+                    println!(
+                        "No later than block {} ({} confirmations).",
+                        anchor.height, anchor.confirmations
+                    );
+                }
+                println!();
+                super::ui::field("Transaction", &hex::encode(proof.txid));
+                super::ui::field("Block hash", &hex::encode(proof.block_hash));
+                super::ui::field("Network", proof.network.as_str());
+                super::ui::field("Confirmations", &anchor.confirmations.to_string());
+                println!();
+                println!("Trusted: daemon {daemon_used} (single source), block hash matched,");
                 println!(
-                    "No later than {} (block {}, {} confirmations).",
-                    crate::wallet::daemon::format_block_time(anchor.block_timestamp),
-                    anchor.height,
-                    anchor.confirmations
-                );
-            } else {
-                println!(
-                    "No later than block {} ({} confirmations).",
-                    anchor.height, anchor.confirmations
+                    "height exact, {}+ confirmations recommended.",
+                    crate::wallet::daemon::MIN_CONFIRMATIONS
                 );
             }
-            println!();
-            super::ui::field("Transaction", &hex::encode(proof.txid));
-            super::ui::field("Block hash", &hex::encode(proof.block_hash));
-            super::ui::field("Network", proof.network.as_str());
-            super::ui::field("Confirmations", &anchor.confirmations.to_string());
-            println!();
-            println!("Trusted: daemon {daemon_used} (single source), block hash matched,");
-            println!(
-                "height exact, {}+ confirmations recommended.",
-                crate::wallet::daemon::MIN_CONFIRMATIONS
-            );
             if anchor.confirmations < crate::wallet::daemon::MIN_CONFIRMATIONS {
                 super::ui::warn(&format!(
                     "Only {} confirmation(s); want {}+. Reorg risk: wait before relying on this.",
@@ -132,20 +170,43 @@ pub async fn run(args: &VerifyArgs, verbose: bool, stagenet: bool) -> Result<()>
                     "NON-MAINNET proof: testnet/stagenet marks have no security value.",
                 );
             }
+            if args.json {
+                print_json(&serde_json::json!({
+                    "ok": true, "anchored": true, "chain_checked": true,
+                    "file_hash": hex::encode(file_hash),
+                    "root": hex::encode(proof.root),
+                    "txid": hex::encode(proof.txid),
+                    "block_height": anchor.height,
+                    "block_hash": hex::encode(proof.block_hash),
+                    "block_time": crate::wallet::daemon::format_block_time(anchor.block_timestamp),
+                    "confirmations": anchor.confirmations,
+                    "network": proof.network.as_str(),
+                    "daemon": daemon_used,
+                }));
+            }
         }
         Err(e) => {
             let _ = ok;
             super::ui::fail("Check failed.");
-            println!();
-            println!("Why:\n{e}");
-            fail_exit();
+            if !args.json {
+                println!();
+                println!("Why:\n{e}");
+            }
+            fail_exit_json(args.json, &format!("{e}"));
         }
     }
     Ok(())
 }
 
-fn fail_exit() -> ! {
+fn print_json(v: &serde_json::Value) {
+    println!("{}", serde_json::to_string(v).unwrap());
+}
+
+fn fail_exit_json(json: bool, err: &str) -> ! {
     use std::io::Write;
+    if json {
+        print_json(&serde_json::json!({"ok": false, "error": err}));
+    }
     let _ = std::io::stdout().flush();
     std::process::exit(1);
 }

@@ -129,7 +129,7 @@ pub async fn run(args: &FinalizeArgs, verbose: bool, stagenet: bool) -> Result<(
         .map_err(|_| anyhow::anyhow!("Pending file holds a short txid"))?;
     let out_dir = op.out_dir.as_ref().map(PathBuf::from);
 
-    stamp::write_proofs(
+    let _ = stamp::write_proofs(
         &pairs,
         &sorted,
         &tree,

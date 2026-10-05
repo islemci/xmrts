@@ -407,7 +407,8 @@ pub async fn start(cfg: &mut WalletConfig) -> Result<u32, ProcessError> {
     }
     if ensure_credentials(cfg) {
         super::connection::save_config(cfg).map_err(|e| ProcessError::Config(e.to_string()))?;
-        println!("Made fresh RPC login for the sidecar. Saved locally.");
+        // stderr: keeps `--json` stdout clean.
+        eprintln!("Made fresh RPC login for the sidecar. Saved locally.");
     }
     let client = cfg.client();
     let sidecar = resolve(cfg)?;

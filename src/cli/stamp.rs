@@ -46,9 +46,15 @@ pub struct StampArgs {
     /// Daemon address for chain checks, like http://127.0.0.1:18081
     #[arg(long)]
     pub daemon: Option<String>,
+    /// Machine-readable JSON summary on stdout (human lines suppressed).
+    #[arg(long)]
+    pub json: bool,
 }
 
 pub async fn run(args: &StampArgs, verbose: bool, stagenet: bool) -> Result<()> {
+    if args.json {
+        super::ui::set_quiet(true);
+    }
     let _ = connection::ensure_dirs();
     if args.files.is_empty() {
         anyhow::bail!("No files given.");
@@ -105,7 +111,7 @@ pub async fn run(args: &StampArgs, verbose: bool, stagenet: bool) -> Result<()> 
 
     let extra_hex =
         commitment::build_tx_extra_hex_for(&commitment, crate::protocol::merkle::MERKLE_V2);
-    if verbose {
+    if verbose && !args.json {
         println!("Commitment: {extra_hex}");
     }
 
@@ -117,7 +123,7 @@ pub async fn run(args: &StampArgs, verbose: bool, stagenet: bool) -> Result<()> 
     let network_name = network.as_str().to_string();
 
     if args.offline {
-        write_proofs(
+        let proofs = write_proofs(
             &hashes,
             &sorted,
             &tree,
@@ -127,8 +133,19 @@ pub async fn run(args: &StampArgs, verbose: bool, stagenet: bool) -> Result<()> 
             &[0u8; 32],
             args.out_dir.as_deref(),
         )?;
-        println!();
         super::ui::note("Offline run. Proofs are pending. No block yet.");
+        if args.json {
+            println!(
+                "{}",
+                serde_json::to_string(&serde_json::json!({
+                    "ok": true, "pending": true, "offline": true,
+                    "root": hex::encode(root),
+                    "network": network_name,
+                    "proofs": proofs.iter().map(|p| p.display().to_string()).collect::<Vec<_>>(),
+                }))
+                .unwrap()
+            );
+        }
         return Ok(());
     }
 
@@ -232,9 +249,21 @@ pub async fn run(args: &StampArgs, verbose: bool, stagenet: bool) -> Result<()> 
         merkle_ver: crate::protocol::merkle::MERKLE_V2,
     })?;
 
+    // Machine mode cannot answer prompts on stdout: require --yes.
+    if args.json && !args.yes && !args.do_not_relay {
+        let _ = std::fs::remove_file(&pending_path);
+        anyhow::bail!("--json needs --yes (or --do-not-relay): refusing to prompt on stdout");
+    }
     if !args.yes && !super::ui::confirm("Send now? [y/N] ")? {
         let _ = std::fs::remove_file(&pending_path);
         super::ui::note("Stopped. No funds spent. Nothing published.");
+        if args.json {
+            println!(
+                "{}",
+                serde_json::to_string(&serde_json::json!({"ok": false, "cancelled": true}))
+                    .unwrap()
+            );
+        }
         return Ok(());
     }
 
@@ -250,7 +279,9 @@ pub async fn run(args: &StampArgs, verbose: bool, stagenet: bool) -> Result<()> 
         }
         h
     };
-    println!();
+    if !args.json {
+        println!();
+    }
     super::ui::field("Transaction", &tx_hash);
     super::ui::field(
         "Fee paid",
@@ -370,7 +401,7 @@ pub async fn run(args: &StampArgs, verbose: bool, stagenet: bool) -> Result<()> 
         (0u64, block_hash)
     };
 
-    write_proofs(
+    let proofs = write_proofs(
         &hashes,
         &sorted,
         &tree,
@@ -383,6 +414,20 @@ pub async fn run(args: &StampArgs, verbose: bool, stagenet: bool) -> Result<()> 
     if height > 0 {
         let _ = std::fs::remove_file(&pending_path);
         super::ui::ok(&format!("Done. Files prove no later than block {height}."));
+    }
+    if args.json {
+        println!(
+            "{}",
+            serde_json::to_string(&serde_json::json!({
+                "ok": true, "pending": height == 0,
+                "txid": hex::encode(txid_bytes),
+                "block_height": height,
+                "root": hex::encode(root),
+                "network": network_name,
+                "proofs": proofs.iter().map(|p| p.display().to_string()).collect::<Vec<_>>(),
+            }))
+            .unwrap()
+        );
     }
     Ok(())
 }
@@ -438,9 +483,10 @@ pub(crate) fn write_proofs(
     height: u64,
     block_hash: &[u8; 32],
     out_dir: Option<&Path>,
-) -> Result<()> {
+) -> Result<Vec<PathBuf>> {
     // M6: one leaf per distinct hash; files with identical content share
     // the same leaf_index.
+    let mut written: Vec<PathBuf> = Vec::new();
     let mut index_of: HashMap<[u8; 32], u64> = HashMap::new();
     for (i, h) in sorted.iter().enumerate() {
         index_of.insert(*h, i as u64);
@@ -480,8 +526,9 @@ pub(crate) fn write_proofs(
         std::fs::write(&out, proof.to_bytes())
             .with_context(|| format!("Writing {}", out.display()))?;
         super::ui::ok(&format!("Proof: {}", out.display()));
+        written.push(out);
     }
-    Ok(())
+    Ok(written)
 }
 
 pub(crate) fn proof_path_for(input: &Path, out_dir: Option<&Path>) -> Result<PathBuf> {

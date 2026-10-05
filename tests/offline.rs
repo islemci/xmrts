@@ -70,3 +70,46 @@ fn offline_stamp_and_verify_round_trip() {
         .unwrap();
     assert!(!status.success());
 }
+
+#[test]
+fn json_output_is_single_line_json() {
+    use std::process::Command;
+    let dir = tempfile::tempdir().unwrap();
+    let f = dir.path().join("f.txt");
+    std::fs::write(&f, b"hello").unwrap();
+    let out = dir.path().join("proofs");
+
+    let stamp = Command::new(bin())
+        .args([
+            "stamp",
+            f.to_str().unwrap(),
+            "--offline",
+            "--out-dir",
+            out.to_str().unwrap(),
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert!(stamp.status.success());
+    let line = String::from_utf8(stamp.stdout).unwrap();
+    assert_eq!(line.lines().count(), 1, "stamp --json must print one line");
+    let v: serde_json::Value = serde_json::from_str(line.trim()).unwrap();
+    assert_eq!(v["ok"], true);
+    assert_eq!(v["pending"], true);
+
+    let verify = Command::new(bin())
+        .args([
+            "verify",
+            f.to_str().unwrap(),
+            out.join("f.txt.xmrts").to_str().unwrap(),
+            "--offline",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert!(verify.status.success());
+    let line = String::from_utf8(verify.stdout).unwrap();
+    assert_eq!(line.lines().count(), 1, "verify --json must print one line");
+    let v: serde_json::Value = serde_json::from_str(line.trim()).unwrap();
+    assert_eq!(v["ok"], true);
+}

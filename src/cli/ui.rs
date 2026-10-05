@@ -10,47 +10,84 @@
 
 use console::style;
 use indicatif::{ProgressBar, ProgressStyle};
+use std::sync::atomic::{AtomicBool, Ordering};
+
+/// Global quiet flag for `--json` mode: human lines are suppressed and only
+/// the JSON document reaches stdout. Set once per invocation.
+static QUIET: AtomicBool = AtomicBool::new(false);
+
+pub fn set_quiet(q: bool) {
+    QUIET.store(q, Ordering::Relaxed);
+}
+
+fn quiet() -> bool {
+    QUIET.load(Ordering::Relaxed)
+}
 
 /// Green check line. Use for done steps.
 pub fn ok(message: &str) {
+    if quiet() {
+        return;
+    }
     println!("{} {message}", style("✓").green().bold());
 }
 
 /// Red cross line. Use for failures.
 pub fn fail(message: &str) {
+    if quiet() {
+        return;
+    }
     println!("{} {message}", style("✗").red().bold());
 }
 
 /// Yellow circle line. Use for pending or skipped steps.
 pub fn note(message: &str) {
+    if quiet() {
+        return;
+    }
     println!("{} {message}", style("○").yellow());
 }
 
 /// Blue info line. Use for helpful facts.
 pub fn info(message: &str) {
+    if quiet() {
+        return;
+    }
     println!("{} {message}", style("ℹ").blue().bold());
 }
 
 /// Dim arrow line. Use for next steps.
 /// Example: hint("Next: run `xmrts wallet open`.")
 pub fn hint(message: &str) {
+    if quiet() {
+        return;
+    }
     println!("{} {message}", style("→").dim());
 }
 
 /// Bold section title with a small icon.
 /// Example: header("◆", "Wallet")
 pub fn header(icon: &str, title: &str) {
+    if quiet() {
+        return;
+    }
     println!();
     println!("{} {}", style(icon).cyan().bold(), style(title).bold());
 }
 
 /// Yellow warning to stderr.
 pub fn warn(message: &str) {
+    if quiet() {
+        return;
+    }
     eprintln!("{} {message}", style("!").yellow().bold());
 }
 
 /// Bold `label: value` line for summaries.
 pub fn field(label: &str, value: &str) {
+    if quiet() {
+        return;
+    }
     println!("{} {value}", style(format!("{label}:")).bold());
 }
 

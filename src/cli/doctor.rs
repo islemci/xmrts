@@ -112,10 +112,49 @@ pub async fn run(_args: &DoctorArgs, verbose: bool, stagenet: bool) -> Result<()
 
     super::ui::header("◆", "Live checks");
     match client.get_version().await {
-        Ok((maj, min)) => super::ui::ok(&format!("Wallet answers (v{maj}.{min}).")),
+        Ok((maj, min)) => {
+            super::ui::ok(&format!("Wallet answers (v{maj}.{min})."));
+            // The stock wallet cannot attach tx_extra; only the patched
+            // build (RPC minor >= 31) can stamp. Fail early here so the
+            // user does not pay a fee for a commitment-less tx.
+            if (maj, min) >= (1, 31) {
+                super::ui::ok("Wallet supports `extra` (patched build).");
+            } else {
+                super::ui::fail(&format!(
+                    "Wallet v{maj}.{min} looks stock: no `extra` support. Stamps would pay a fee with no mark."
+                ));
+                super::ui::hint(
+                    "Install the patched monero-wallet-rpc (see README: Managed sidecar).",
+                );
+            }
+        }
         Err(e) => {
             super::ui::fail(&format!("Wallet is quiet ({e})."));
             super::ui::hint("Try `xmrts wallet start`, then `xmrts wallet open`.");
+        }
+    }
+    // Daemon reachable + on the configured network.
+    match &cfg.daemon_endpoint {
+        Some(d) => match crate::wallet::daemon::get_info(d).await {
+            Ok((nettype, tip)) => {
+                super::ui::field("Daemon tip", &format!("{tip} ({nettype})"));
+                if !nettype.eq_ignore_ascii_case(&cfg.network) {
+                    super::ui::fail(&format!(
+                        "Daemon is {nettype} but config says {}. Proofs would anchor to the wrong chain.",
+                        cfg.network
+                    ));
+                    super::ui::hint("Fix with `xmrts connect --daemon <url> --network <net>`.");
+                } else {
+                    super::ui::ok("Daemon network matches config.");
+                }
+            }
+            Err(e) => {
+                super::ui::warn(&format!("Daemon is quiet ({e})."));
+                super::ui::hint("Chain checks will wait. Is the node up?");
+            }
+        },
+        None => {
+            super::ui::note("No daemon set. `stamp` tries the default local node.");
         }
     }
     match client.get_height().await {

@@ -172,6 +172,16 @@ pub async fn run(args: &StampArgs, verbose: bool, stagenet: bool) -> Result<()> 
     if verbose {
         super::ui::field("Wallet RPC", &format!("v{}.{}", version.0, version.1));
     }
+    // Guard before any fee is spent: stock wallets silently ignore the
+    // `extra` key, which would relay a mark-less tx. Only the patched
+    // build (RPC minor >= 31) can stamp.
+    if version < (1, 31) {
+        anyhow::bail!(
+            "Wallet RPC v{}.{} looks stock: no `extra` support. Stamping would spend a fee with no mark.\nInstall the patched monero-wallet-rpc (see README: Managed sidecar).",
+            version.0,
+            version.1
+        );
+    }
     let (address, address_checked) = match &args.address {
         Some(a) => (a.clone(), false),
         None => client

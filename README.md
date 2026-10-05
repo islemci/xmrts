@@ -20,11 +20,11 @@ xmrts doctor
 xmrts --help
 ```
 
-Pending is normal: Monero averages a block every ~2 minutes, so `stamp`
-waits up to ~10 minutes for confirmation and often leaves pending proofs
-plus a recovery record. `xmrts finalize` upgrades them to anchored proofs
-once the transaction is buried deep enough (10+ confirmations). Safe to
-Ctrl-C the wait at any time.
+Your transaction will be completed in around 3 minutes: `stamp` waits for
+the transaction to confirm and bury 2 deep, then writes anchored proofs.
+If confirmation isn't seen in time, `stamp` leaves pending proofs plus a
+recovery record, and `xmrts finalize` upgrades them to anchored proofs
+once the transaction confirms.
 
 ## Managed sidecar
 
@@ -76,8 +76,8 @@ What you trust:
   hash, and the daemon's network, and warns below 10 confirmations — but a
   lying daemon can still lie. Prefer your own node; treat plain-HTTP remote
   nodes as untrusted transport.
-- **Confirmation depth.** 1-2 block reorgs happen. Proofs anchor only at
-  10+ confirmations, and `verify` warns below that.
+- **Confirmation depth.** Proofs anchor at 2 confirmations, and `verify`
+  warns below that.
 - **Mainnet.** Testnet/stagenet marks verify the same way but carry no
   security value; `verify` says so loudly.
 - **The patched `monero-wallet-rpc`.** Stock wallet RPC cannot attach

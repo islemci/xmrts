@@ -260,13 +260,13 @@ async fn mempool_tx_is_unconfirmed() {
 
 #[tokio::test]
 async fn shallow_confirmation_reports_low_depth() {
-    // Tip only 2 blocks above the anchor → confirmations = 3 < 10.
+    // Tip at the anchor height → confirmations = 1 < 2.
     let root = [0x42u8; 32];
     let block_hash = [0xabu8; 32];
     let txid_hex = hex::encode([0x33u8; 32]);
     let extra = xmrts::protocol::commitment::build_tx_extra_hex(&root);
     let state = Arc::new(Mutex::new({
-        let mut s = MockState::new("mainnet", 1_000_102);
+        let mut s = MockState::new("mainnet", 1_000_100);
         s.txs.insert(txid_hex.clone(), (extra, 1_000_100));
         s.headers.insert(1_000_100, hex::encode(block_hash));
         s
@@ -282,7 +282,7 @@ async fn shallow_confirmation_reports_low_depth() {
     )
     .await
     .expect("shallow anchor still resolves");
-    assert_eq!(anchor.confirmations, 3);
+    assert_eq!(anchor.confirmations, 1);
     assert!(
         anchor.confirmations < xmrts::wallet::daemon::MIN_CONFIRMATIONS,
         "test setup must be below threshold"

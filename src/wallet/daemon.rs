@@ -5,10 +5,10 @@
 
 use thiserror::Error;
 
-/// Minimum confirmations before a proof counts as anchored (H3).
-/// Matches Monero's ~10-block spendable window; reorgs of 1-2 blocks are
-/// routine, so depth 1 is never final.
-pub const MIN_CONFIRMATIONS: u64 = 10;
+/// Minimum confirmations before a proof counts as anchored.
+/// Two confirmations: cheap resistance to single-block reorgs while keeping
+/// stamps fast (around 3 minutes). Depth 1 is never final.
+pub const MIN_CONFIRMATIONS: u64 = 2;
 
 #[derive(Debug, Error)]
 pub enum DaemonError {

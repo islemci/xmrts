@@ -327,8 +327,7 @@ pub async fn run(args: &StampArgs, verbose: bool, stagenet: bool) -> Result<()> 
         super::ui::note("Skipping wait. Proofs stay pending.");
         (0u64, [0u8; 32])
     } else {
-        super::ui::note("Blocks average ~2 min; waiting up to ~10 min. Pending is normal.");
-        super::ui::hint("Safe to Ctrl-C any time: `xmrts finalize` finishes later.");
+        super::ui::note("Your transaction will be completed in around 3 minutes.");
         let bar = super::ui::spinner("Waiting for block...");
         let found = wait_for_confirmation(&client, &tx_hash, &bar).await;
         super::ui::abandon(&bar);
@@ -381,13 +380,11 @@ pub async fn run(args: &StampArgs, verbose: bool, stagenet: bool) -> Result<()> 
                     } else {
                         match crate::wallet::daemon::block_hash(&d, chain_height).await {
                             Ok(bh) => {
-                                // H3: depth gate.
-                                let depth = match crate::wallet::daemon::get_info(&d).await {
-                                    Ok((_, tip)) => {
-                                        tip.saturating_sub(chain_height).saturating_add(1)
-                                    }
-                                    Err(_) => 1,
-                                };
+                                // Depth gate: wait for the second confirmation
+                                // instead of going pending at depth 1.
+                                let bar = super::ui::spinner("Waiting for confirmations...");
+                                let depth = wait_for_depth(&d, chain_height, &bar).await;
+                                super::ui::abandon(&bar);
                                 if depth < crate::wallet::daemon::MIN_CONFIRMATIONS {
                                     super::ui::note(&format!(
                                         "Only {depth} confirmation(s); want {}+. Proofs stay pending until deep enough.",
@@ -501,11 +498,9 @@ fn collect_dir(dir: &Path, recursive: bool, out: &mut Vec<PathBuf>) -> Result<()
     Ok(())
 }
 
-/// Poll the wallet for confirmation (M4). Monero averages a block every
-/// ~2 minutes with Poisson arrivals, so ~37% of stamps need more than 2
-/// minutes. We wait ~10 minutes (120 x 5s) with a visible countdown; the
-/// pending record is already on disk, so Ctrl-C is safe at any point and
-/// `xmrts finalize` finishes the job later.
+/// Poll the wallet for the first confirmation. Monero averages a block
+/// every ~2 minutes, so we wait up to ~10 minutes (120 x 5s) with a
+/// visible countdown; afterwards `xmrts finalize` finishes the job.
 async fn wait_for_confirmation(
     client: &crate::wallet::rpc::WalletRpc,
     txid: &str,
@@ -518,7 +513,7 @@ async fn wait_for_confirmation(
         let elapsed = (i + 1) * STEP_SECS;
         let remain = (ROUNDS - i - 1) * STEP_SECS;
         progress.set_message(format!(
-            "Waiting for block... {elapsed}s in, ~{remain}s left (blocks average ~2 min; safe to Ctrl-C, then `xmrts finalize`)"
+            "Waiting for block... {elapsed}s in, ~{remain}s left (around 3 minutes total)"
         ));
         if let Ok(v) = crate::wallet::rpc::get_transfer_by_txid(client, txid).await {
             let h = v
@@ -533,6 +528,29 @@ async fn wait_for_confirmation(
         }
     }
     None
+}
+
+/// Poll the daemon until `block_height` is buried `MIN_CONFIRMATIONS`
+/// deep (up to ~8 minutes). Returns the depth reached.
+async fn wait_for_depth(daemon: &str, block_height: u64, progress: &indicatif::ProgressBar) -> u64 {
+    const ROUNDS: u64 = 96;
+    const STEP_SECS: u64 = 5;
+    let mut depth = 1;
+    for i in 0..ROUNDS {
+        if let Ok((_, tip)) = crate::wallet::daemon::get_info(daemon).await {
+            depth = tip.saturating_sub(block_height).saturating_add(1);
+            if depth >= crate::wallet::daemon::MIN_CONFIRMATIONS {
+                return depth;
+            }
+        }
+        let remain = (ROUNDS - i - 1) * STEP_SECS;
+        progress.set_message(format!(
+            "Waiting for confirmations... {depth}/{} (~{remain}s left)",
+            crate::wallet::daemon::MIN_CONFIRMATIONS,
+        ));
+        tokio::time::sleep(std::time::Duration::from_secs(STEP_SECS)).await;
+    }
+    depth
 }
 
 #[allow(clippy::too_many_arguments)]

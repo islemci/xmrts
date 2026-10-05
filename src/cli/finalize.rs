@@ -19,12 +19,41 @@ pub struct FinalizeArgs {
     /// Daemon address for chain checks.
     #[arg(long)]
     pub daemon: Option<String>,
+    /// Finish every pending stamp, one after another.
+    #[arg(long)]
+    pub all: bool,
 }
 
 pub async fn run(args: &FinalizeArgs, verbose: bool, stagenet: bool) -> Result<()> {
     let _ = verbose;
     let _ = connection::ensure_dirs();
     super::ui::header("◆", "Finalize");
+    if args.all && args.pending.is_some() {
+        anyhow::bail!("Use --all or name one pending. Not both.");
+    }
+    if args.all {
+        let all = pending::list();
+        if all.is_empty() {
+            anyhow::bail!("Nothing pending. No files wait.");
+        }
+        let mut failures: Vec<String> = Vec::new();
+        for p in &all {
+            match finalize_one(p, args.daemon.as_deref(), stagenet).await {
+                Ok(()) => {}
+                Err(e) => failures.push(format!("{}: {e:#}", p.display())),
+            }
+        }
+        if !failures.is_empty() {
+            anyhow::bail!(
+                "{} of {} pending(s) still wait:\n{}",
+                failures.len(),
+                all.len(),
+                failures.join("\n")
+            );
+        }
+        super::ui::ok(&format!("Done. {} pending(s) finished.", all.len()));
+        return Ok(());
+    }
     let pending_path = match &args.pending {
         Some(p) => p.clone(),
         None => match pending::list().as_slice() {
@@ -32,7 +61,7 @@ pub async fn run(args: &FinalizeArgs, verbose: bool, stagenet: bool) -> Result<(
             [only] => only.clone(),
             many => {
                 anyhow::bail!(
-                    "Many pendings. Name one:\n{}",
+                    "Many pendings. Name one or pass --all:\n{}",
                     many.iter()
                         .map(|p| format!("  {}", p.display()))
                         .collect::<Vec<_>>()
@@ -41,7 +70,16 @@ pub async fn run(args: &FinalizeArgs, verbose: bool, stagenet: bool) -> Result<(
             }
         },
     };
-    let op = pending::load(&pending_path)?;
+    finalize_one(&pending_path, args.daemon.as_deref(), stagenet).await
+}
+
+async fn finalize_one(
+    pending_path: &std::path::Path,
+    daemon_opt: Option<&str>,
+    stagenet: bool,
+) -> Result<()> {
+    super::ui::field("Pending", &pending_path.display().to_string());
+    let op = pending::load(pending_path)?;
     if op.txid.is_empty() {
         anyhow::bail!("This pending never sent (no txid). Run `xmrts stamp` again");
     }
@@ -56,9 +94,8 @@ pub async fn run(args: &FinalizeArgs, verbose: bool, stagenet: bool) -> Result<(
     }
 
     let cfg = connection::load_config();
-    let daemon = args
-        .daemon
-        .clone()
+    let daemon = daemon_opt
+        .map(String::from)
         .or(cfg.daemon_endpoint.clone())
         .ok_or_else(|| anyhow::anyhow!("No daemon set. Run `xmrts connect --daemon <url>`"))?;
     // M6: commitment is version-aware (V1 raw root, V2 size-bound).
@@ -139,7 +176,7 @@ pub async fn run(args: &FinalizeArgs, verbose: bool, stagenet: bool) -> Result<(
         &block_hash,
         out_dir.as_deref(),
     )?;
-    let _ = std::fs::remove_file(&pending_path);
+    let _ = std::fs::remove_file(pending_path);
     println!();
     super::ui::ok(&format!(
         "Done. {} proof(s) at block {height}.",

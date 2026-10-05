@@ -40,6 +40,9 @@ pub struct StampArgs {
     /// the fee is lost.
     #[arg(long, default_value_t = 10_000)]
     pub amount: u64,
+    /// Walk directories depth-first (default: top level only).
+    #[arg(long)]
+    pub recursive: bool,
     /// Folder for .xmrts proofs (default: next to each file).
     #[arg(long)]
     pub out_dir: Option<PathBuf>,
@@ -59,8 +62,21 @@ pub async fn run(args: &StampArgs, verbose: bool, stagenet: bool) -> Result<()> 
     if args.files.is_empty() {
         anyhow::bail!("No files given.");
     }
+    // UX7: accept directories (top level, or --recursive). Shell globs keep
+    // working: they arrive as plain file lists.
+    let inputs = expand_inputs(&args.files, args.recursive)?;
+    if inputs.is_empty() {
+        anyhow::bail!("No files found in the given paths.");
+    }
+    if inputs.len() != args.files.len() {
+        super::ui::note(&format!(
+            "{} path(s) expanded to {} file(s).",
+            args.files.len(),
+            inputs.len()
+        ));
+    }
     let mut seen: HashMap<String, usize> = HashMap::new();
-    for f in &args.files {
+    for f in &inputs {
         if !f.is_file() {
             anyhow::bail!("Cannot read file: {}", f.display());
         }
@@ -71,7 +87,7 @@ pub async fn run(args: &StampArgs, verbose: bool, stagenet: bool) -> Result<()> 
     }
 
     let mut hashes: Vec<([u8; 32], PathBuf)> = Vec::new();
-    for f in &args.files {
+    for f in &inputs {
         let total = std::fs::metadata(f).map(|m| m.len()).unwrap_or(0);
         let bar = super::ui::bytes_bar(&format!("Hashing {}", f.display()), total.max(1));
         let h = hash::hash_file_with_progress(f, |n| bar.inc(n))
@@ -230,8 +246,7 @@ pub async fn run(args: &StampArgs, verbose: bool, stagenet: bool) -> Result<()> 
         ),
     );
     let pending_path = pending::save(&PendingOp {
-        files: args
-            .files
+        files: inputs
             .iter()
             .map(|f| f.to_string_lossy().into_owned())
             .collect(),
@@ -439,6 +454,40 @@ fn canonical_key(p: &Path) -> Result<String> {
     }
 }
 
+/// Expand stamp inputs: plain files pass through, directories expand to
+/// their files (top level, or depth-first with `--recursive`). Output is
+/// sorted for determinism. Broken symlinks and missing paths are errors.
+fn expand_inputs(paths: &[PathBuf], recursive: bool) -> Result<Vec<PathBuf>> {
+    let mut out: Vec<PathBuf> = Vec::new();
+    for p in paths {
+        if p.is_file() {
+            out.push(p.clone());
+        } else if p.is_dir() {
+            collect_dir(p, recursive, &mut out)?;
+        } else {
+            anyhow::bail!("Cannot read file: {}", p.display());
+        }
+    }
+    out.sort();
+    Ok(out)
+}
+
+fn collect_dir(dir: &Path, recursive: bool, out: &mut Vec<PathBuf>) -> Result<()> {
+    let mut entries: Vec<PathBuf> = std::fs::read_dir(dir)
+        .with_context(|| format!("Reading dir {}", dir.display()))?
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .collect();
+    entries.sort();
+    for e in entries {
+        if e.is_file() {
+            out.push(e);
+        } else if e.is_dir() && recursive {
+            collect_dir(&e, true, out)?;
+        }
+    }
+    Ok(())
+}
+
 /// Poll the wallet for confirmation (M4). Monero averages a block every
 /// ~2 minutes with Poisson arrivals, so ~37% of stamps need more than 2
 /// minutes. We wait ~10 minutes (120 x 5s) with a visible countdown; the
@@ -523,6 +572,14 @@ pub(crate) fn write_proofs(
         }
         .map_err(|e| anyhow::anyhow!("Proof failed: {e}"))?;
         let out = proof_path_for(path, out_dir)?;
+        // Two inputs with the same file name (e.g. a/x.txt + b/x.txt with
+        // one --out-dir) would silently overwrite each other: fail instead.
+        if written.contains(&out) {
+            anyhow::bail!(
+                "Two inputs map to the same proof file {}. Use separate --out-dir runs.",
+                out.display()
+            );
+        }
         std::fs::write(&out, proof.to_bytes())
             .with_context(|| format!("Writing {}", out.display()))?;
         super::ui::ok(&format!("Proof: {}", out.display()));

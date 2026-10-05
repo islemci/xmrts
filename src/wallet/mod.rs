@@ -4,6 +4,7 @@
 
 pub mod connection;
 pub mod daemon;
+pub mod discover;
 pub mod price;
 pub mod process;
 pub mod rpc;

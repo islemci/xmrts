@@ -122,6 +122,35 @@ fn find_on_path(name: &Path) -> Option<PathBuf> {
     None
 }
 
+/// Ensure RPC credentials exist, generating them on first use.
+///
+/// Like Bitcoin Core's cookie auth: the username is stable (`xmrts`) and
+/// the password is 48 random alphanumerics (no shell-special characters,
+/// so it never needs quoting). Stored in the config file
+/// (mode 0600, see `save_config`) and passed to the sidecar *and* used
+/// for our own requests, so the user never needs to know, type, or
+/// remember anything. Explicitly configured credentials are never
+/// overwritten — only missing pieces are filled in.
+/// Returns true when anything was generated.
+pub fn ensure_credentials(cfg: &mut WalletConfig) -> bool {
+    let mut generated = false;
+    if cfg.username.is_none() {
+        cfg.username = Some("xmrts".to_string());
+        generated = true;
+    }
+    if cfg.password.is_none() {
+        use rand::{distr::Alphanumeric, Rng};
+        let password: String = rand::rng()
+            .sample_iter(&Alphanumeric)
+            .take(48)
+            .map(char::from)
+            .collect();
+        cfg.password = Some(password);
+        generated = true;
+    }
+    generated
+}
+
 /// Split `http(s)://host:port` into (host, port).
 pub fn parse_endpoint(endpoint: &str) -> Result<(String, u16), ProcessError> {
     let rest = endpoint
@@ -295,14 +324,18 @@ pub async fn status(cfg: &WalletConfig, client: &super::rpc::WalletRpc) -> Sidec
 }
 
 /// Start the sidecar (no-op when already running). Returns the pid.
-/// Never opens a wallet: opening needs the wallet password, which xmrts
-/// must not hold. The user opens their wallet afterwards via `open_wallet`.
-pub async fn start(
-    cfg: &WalletConfig,
-    client: &super::rpc::WalletRpc,
-) -> Result<u32, ProcessError> {
+/// Provisions RPC credentials first (see [`ensure_credentials`]) so the
+/// spawned process and our own health checks share them; the user never
+/// needs to know them. Never opens a wallet: opening needs the wallet
+/// password, which xmrts must not hold.
+pub async fn start(cfg: &mut WalletConfig) -> Result<u32, ProcessError> {
+    if ensure_credentials(cfg) {
+        super::connection::save_config(cfg).map_err(|e| ProcessError::Config(e.to_string()))?;
+        println!("Generated RPC credentials for the sidecar (stored locally, mode 0600).");
+    }
+    let client = cfg.client();
     let sidecar = resolve(cfg)?;
-    if let SidecarStatus::Running { pid, .. } = status(cfg, client).await {
+    if let SidecarStatus::Running { pid, .. } = status(cfg, &client).await {
         return Ok(pid);
     }
     // Something answers that isn't ours (e.g. a manually started wallet):
@@ -413,29 +446,36 @@ pub fn stop(cfg: &WalletConfig) -> Result<String, ProcessError> {
     Ok(format!("sidecar (pid {pid}) stopped"))
 }
 
-/// Ensure a managed sidecar is running, starting it if needed. Returns
-/// `Ok(true)` when RPC is healthy afterwards. Unmanaged configs return
-/// `Ok(false)` so callers fall back to their legacy behavior.
-pub async fn ensure_running(
-    cfg: &WalletConfig,
-    client: &super::rpc::WalletRpc,
-) -> Result<bool, ProcessError> {
-    match status(cfg, client).await {
-        SidecarStatus::Running { .. } => Ok(true),
-        SidecarStatus::NotManaged(_) => Ok(false),
-        SidecarStatus::Stopped => {
-            start(cfg, client).await?;
-            Ok(true)
-        }
-        SidecarStatus::Unhealthy(pid) => Err(ProcessError::Config(format!(
-            "managed sidecar (pid {pid}) is not answering RPC; inspect it with `xmrts wallet status`"
-        ))),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn generates_credentials_without_clobbering() {
+        let mut cfg = WalletConfig::default();
+        assert!(ensure_credentials(&mut cfg));
+        assert_eq!(cfg.username.as_deref(), Some("xmrts"));
+        let first = cfg.password.clone().unwrap();
+        assert_eq!(first.len(), 48); // 48 random alphanumerics
+        assert!(first.chars().all(|c| c.is_ascii_alphanumeric()));
+        // Second call: nothing changes.
+        assert!(!ensure_credentials(&mut cfg));
+        assert_eq!(cfg.password.as_deref(), Some(first.as_str()));
+        // Explicit credentials are never overwritten.
+        let mut cfg2 = WalletConfig {
+            username: Some("mine".to_string()),
+            password: Some("mine-pass".to_string()),
+            ..WalletConfig::default()
+        };
+        assert!(!ensure_credentials(&mut cfg2));
+        assert_eq!(cfg2.username.as_deref(), Some("mine"));
+        // Randomness: two fresh generations differ.
+        let mut a = WalletConfig::default();
+        let mut b = WalletConfig::default();
+        ensure_credentials(&mut a);
+        ensure_credentials(&mut b);
+        assert_ne!(a.password, b.password);
+    }
 
     #[test]
     fn parses_endpoints() {

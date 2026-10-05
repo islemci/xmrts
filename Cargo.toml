@@ -32,6 +32,7 @@ rpassword = "7"
 zeroize = "1"
 indicatif = "0.17"
 console = "0.15"
+rand = "0.9"
 
 [dev-dependencies]
 tempfile = "3"

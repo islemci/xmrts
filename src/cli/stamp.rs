@@ -124,15 +124,17 @@ pub async fn run(args: &StampArgs, verbose: bool, stagenet: bool) -> Result<()> 
     }
 
     // Step 5 — wallet tx.
-    let client = cfg.client();
+    let mut client = cfg.client();
     // Auto-start a managed sidecar so the preview below has something to
     // talk to. Unmanaged configs skip silently (legacy error path).
+    // start() may provision credentials, so rebuild the client after it.
     match crate::wallet::process::status(&cfg, &client).await {
         crate::wallet::process::SidecarStatus::Stopped => {
             println!("Starting managed monero-wallet-rpc…");
-            crate::wallet::process::start(&cfg, &client)
+            crate::wallet::process::start(&mut cfg)
                 .await
                 .map_err(|e| anyhow::anyhow!("managed sidecar unavailable: {e}"))?;
+            client = cfg.client();
         }
         crate::wallet::process::SidecarStatus::Unhealthy(pid) => {
             anyhow::bail!(

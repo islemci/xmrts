@@ -32,11 +32,11 @@ pub enum WalletCommand {
 }
 
 pub async fn run(args: &WalletArgs, verbose: bool) -> Result<()> {
-    let cfg = connection::load_config();
+    let mut cfg = connection::load_config();
     let client = cfg.client();
     match &args.command {
         WalletCommand::Start => {
-            match process::start(&cfg, &client).await {
+            match process::start(&mut cfg).await {
                 Ok(pid) => {
                     super::ui::ok(&format!("Sidecar running (pid {pid})"));
                     println!("Next: `xmrts wallet open`, then `xmrts doctor`.");

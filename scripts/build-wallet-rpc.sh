@@ -175,5 +175,12 @@ JOBS="${JOBS:-$NPROC}"
 cmake --build "$WORK/build/release" --target wallet_rpc_server -j"$JOBS"
 
 BIN="$WORK/build/release/bin/monero-wallet-rpc"
-"$BIN" --version
+# Smoke test: execute --version for native builds; a cross build
+# produces a foreign executable that cannot run here, so identify it
+# with `file` instead of executing it.
+if [ -z "${MONERO_HOST:-}" ]; then
+  "$BIN" --version
+else
+  file "$BIN"
+fi
 ls -la "$BIN"

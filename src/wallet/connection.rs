@@ -81,8 +81,7 @@ impl WalletConfig {
     /// True when the endpoint is not loopback - caller must warn about
     /// non-TLS transport.
     pub fn is_remote(&self) -> bool {
-        let e = self.endpoint.to_ascii_lowercase();
-        !(e.contains("127.0.0.1") || e.contains("localhost") || e.contains("[::1]"))
+        !endpoint_is_loopback(&self.endpoint)
     }
 
     pub fn is_tls(&self) -> bool {
@@ -104,6 +103,29 @@ impl WalletConfig {
             self.password.clone(),
         )
     }
+}
+
+/// True when a daemon/wallet endpoint URL points at loopback.
+/// Parses the host exactly (L1 fix): `http://127.0.0.1.evil.com` is NOT
+/// loopback. Handles `localhost`, `127.0.0.1`, `::1` (bracketed or not).
+pub fn endpoint_is_loopback(endpoint: &str) -> bool {
+    let rest = endpoint
+        .strip_prefix("https://")
+        .or_else(|| endpoint.strip_prefix("http://"))
+        .unwrap_or(endpoint);
+    // Strip userinfo, then cut at first '/', '?', '#'.
+    let rest = rest.rsplit('@').next().unwrap_or(rest);
+    let host_port = rest.split(['/', '?', '#']).next().unwrap_or(rest);
+    // Strip port (but not for bracketed IPv6 without port... handle below).
+    let host = if let Some(stripped) = host_port.strip_prefix('[') {
+        stripped.split(']').next().unwrap_or(stripped)
+    } else if host_port.matches(':').count() == 1 {
+        host_port.split(':').next().unwrap_or(host_port)
+    } else {
+        host_port
+    };
+    let h = host.to_ascii_lowercase();
+    h == "127.0.0.1" || h == "localhost" || h == "::1"
 }
 
 /// Platform config directory: `~/.config/xmrts` (Linux),
@@ -160,4 +182,34 @@ pub fn save_config(cfg: &WalletConfig) -> Result<PathBuf, ConnectionError> {
         let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
     }
     Ok(path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn loopback_detection_is_exact() {
+        assert!(endpoint_is_loopback("http://127.0.0.1:18081"));
+        assert!(endpoint_is_loopback("http://localhost:18081"));
+        assert!(endpoint_is_loopback("https://localhost:18081/"));
+        assert!(endpoint_is_loopback("http://[::1]:18081"));
+        assert!(endpoint_is_loopback("http://127.0.0.1:18081/"));
+        // L1: suffix tricks must NOT count as loopback.
+        assert!(!endpoint_is_loopback("http://127.0.0.1.evil.com:18081"));
+        assert!(!endpoint_is_loopback("http://localhost.evil.com:18081"));
+        assert!(!endpoint_is_loopback("http://evil.com:18081"));
+        assert!(!endpoint_is_loopback("http://192.168.1.1:18081"));
+        // is_remote agrees.
+        let cfg = WalletConfig {
+            endpoint: "http://127.0.0.1.evil.com:18082".to_string(),
+            ..WalletConfig::default()
+        };
+        assert!(cfg.is_remote());
+        let cfg = WalletConfig {
+            endpoint: "http://127.0.0.1:18082".to_string(),
+            ..WalletConfig::default()
+        };
+        assert!(!cfg.is_remote());
+    }
 }

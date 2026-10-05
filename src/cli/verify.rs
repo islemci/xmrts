@@ -167,6 +167,15 @@ async fn blockchain_check(
             "No daemon set so chain bytes stay unchecked.\nSet one with `xmrts connect --daemon http://127.0.0.1:18081`. Any local or remote node fits. Or pass --offline for crypto only."
         );
     };
+    // M1: one remote daemon decides the result. Warn on plain-HTTP
+    // non-loopback transport (response could be tampered in flight).
+    if daemon.to_ascii_lowercase().starts_with("http://")
+        && !connection::endpoint_is_loopback(&daemon)
+    {
+        super::ui::warn(&format!(
+            "Daemon {daemon} is remote without TLS. A network attacker could lie about the chain."
+        ));
+    }
     // Full anchor check: commitment + exact height + block-hash match +
     // daemon nettype match (H1+M1). No wallet involved (M2): verification
     // depends only on the proof file, the original file, and daemon(s).

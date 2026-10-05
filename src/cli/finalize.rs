@@ -78,7 +78,6 @@ async fn finalize_one(
     daemon_opt: Option<&str>,
     stagenet: bool,
 ) -> Result<()> {
-    super::ui::field("Pending", &pending_path.display().to_string());
     let op = pending::load(pending_path)?;
     if op.txid.is_empty() {
         anyhow::bail!("This pending never sent (no txid). Run `xmrts stamp` again");

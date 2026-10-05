@@ -151,12 +151,6 @@ pub async fn run(args: &VerifyArgs, verbose: bool, stagenet: bool) -> Result<()>
                 super::ui::field("Block hash", &hex::encode(proof.block_hash));
                 super::ui::field("Network", proof.network.as_str());
                 super::ui::field("Confirmations", &anchor.confirmations.to_string());
-                println!();
-                println!("Trusted: daemon {daemon_used} (single source), block hash matched,");
-                println!(
-                    "height exact, {}+ confirmations recommended.",
-                    crate::wallet::daemon::MIN_CONFIRMATIONS
-                );
             }
             if anchor.confirmations < crate::wallet::daemon::MIN_CONFIRMATIONS {
                 super::ui::warn(&format!(

@@ -64,8 +64,6 @@ pub fn run(args: &InitArgs) -> Result<()> {
         println!("Sidecar management enabled: `xmrts wallet start`.");
     }
     println!();
-    println!("No seeds, keys, or wallet passwords were created or stored. xmrts never holds them,");
-    println!("and it never opens wallets by itself — that step stays manual via `open_wallet`.");
     println!("Next: run `xmrts connect`.");
     Ok(())
 }

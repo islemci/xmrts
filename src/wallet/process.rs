@@ -342,13 +342,20 @@ pub async fn start(
         std::fs::write(pf, pid.to_string())?;
     }
     // Wait for health (generous: first start loads the binary cold).
+    // Keep the last error: a 401-without-credentials (server kept an old
+    // --rpc-login via its .login file while we configured none) is the
+    // classic cause, and the generic timeout hides it.
+    let mut last_err = String::from("no attempts made");
     for _ in 0..30 {
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-        if client.get_version().await.is_ok() {
-            return Ok(pid);
+        match client.get_version().await {
+            Ok(_) => return Ok(pid),
+            Err(e) => last_err = e.to_string(),
         }
     }
-    Err(ProcessError::Unhealthy)
+    Err(ProcessError::Config(format!(
+        "wallet RPC did not become healthy in time; last error: {last_err}"
+    )))
 }
 
 /// Stop our sidecar (SIGTERM, then SIGKILL after a grace period).

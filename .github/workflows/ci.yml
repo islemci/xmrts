@@ -9,6 +9,10 @@ on:
       - "**"
   pull_request:
 
+# Least privilege: these jobs only read the repo (checkout + cargo).
+permissions:
+  contents: read
+
 jobs:
   check:
     runs-on: ubuntu-22.04

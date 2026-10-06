@@ -137,7 +137,7 @@ pub async fn run(_args: &DoctorArgs, verbose: bool, stagenet: bool) -> Result<()
             super::ui::hint("Try `xmrts wallet start`, then `xmrts wallet open`.");
         }
     }
-    // Daemon reachable + on the configured network.
+    // Daemon reachable + on the configured network + tip fresh.
     match &cfg.daemon_endpoint {
         Some(d) => match crate::wallet::daemon::get_info(d).await {
             Ok((nettype, tip)) => {
@@ -150,6 +150,31 @@ pub async fn run(_args: &DoctorArgs, verbose: bool, stagenet: bool) -> Result<()
                     super::ui::hint("Fix with `xmrts connect --daemon <url> --network <net>`.");
                 } else {
                     super::ui::ok("Daemon network matches config.");
+                }
+                // Freshness: a reachable but stalled node (still syncing,
+                // or stuck behind a reorg) anchors against old blocks.
+                // `tip` is the chain length, so the top block is tip - 1.
+                match crate::wallet::daemon::block_header(d, tip.saturating_sub(1)).await {
+                    Ok((_, 0)) => super::ui::note("Tip timestamp unknown. Freshness unchecked."),
+                    Ok((_, ts)) => {
+                        let now = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map(|t| t.as_secs())
+                            .unwrap_or(0);
+                        match crate::wallet::daemon::tip_staleness(ts, now) {
+                            Some(age) => {
+                                super::ui::warn(&format!(
+                                    "Daemon tip is {age} old ({}). It may still sync or be stuck; stamps would anchor to stale blocks.",
+                                    crate::wallet::daemon::format_block_time(ts)
+                                ));
+                                super::ui::hint("Wait for sync, or point at a synced node.");
+                            }
+                            None => super::ui::ok("Daemon tip is fresh."),
+                        }
+                    }
+                    Err(e) => super::ui::note(&format!(
+                        "Tip header unreadable ({e}). Freshness unchecked."
+                    )),
                 }
             }
             Err(e) => {

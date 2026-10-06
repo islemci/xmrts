@@ -128,7 +128,7 @@ fn route(path: &str, body: &serde_json::Value, state: &Arc<Mutex<MockState>>) ->
                     .unwrap_or(0);
                 match st.headers.get(&h) {
                     Some(hash) => serde_json::json!({
-                        "result": {"block_header": {"hash": hash, "height": h}}
+                        "result": {"block_header": {"hash": hash, "height": h, "timestamp": 1760000000u64}}
                     }),
                     None => serde_json::json!({"error": {"code": -1, "message": "no such block"}}),
                 }
@@ -507,4 +507,14 @@ async fn quorum_detects_split_chain() {
         xmrts::wallet::daemon::verify_anchor(&b, &txid_hex, &root, 3_000_090, &hash_a, "mainnet")
             .await;
     assert!(r.is_err(), "split chain must fail, got {r:?}");
+}
+
+#[tokio::test]
+async fn block_header_returns_hash_and_timestamp() {
+    let (endpoint, _, _, block_hash) = setup().await;
+    let (hash, ts) = xmrts::wallet::daemon::block_header(&endpoint, 3_000_090)
+        .await
+        .expect("header must resolve");
+    assert_eq!(hash, block_hash);
+    assert_eq!(ts, 1760000000u64);
 }

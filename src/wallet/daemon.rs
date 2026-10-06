@@ -192,6 +192,75 @@ pub async fn block_hash(daemon_endpoint: &str, height: u64) -> Result<[u8; 32], 
         .try_into()
         .map_err(|_| DaemonError::Malformed("bad block hash length".to_string()))
 }
+
+/// Fetch the block header (hash, timestamp) for a height.
+/// Timestamp is 0 when the daemon omits it (tolerated: callers treat 0
+/// as unknown rather than failing the whole check).
+pub async fn block_header(
+    daemon_endpoint: &str,
+    height: u64,
+) -> Result<([u8; 32], u64), DaemonError> {
+    let url = format!("{}/json_rpc", daemon_endpoint.trim_end_matches('/'));
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new());
+    let resp: serde_json::Value = client
+        .post(&url)
+        .json(&serde_json::json!({
+            "jsonrpc": "2.0", "id": "0",
+            "method": "get_block_header_by_height",
+            "params": {"height": height},
+        }))
+        .send()
+        .await
+        .map_err(|e| DaemonError::Unreachable {
+            endpoint: daemon_endpoint.to_string(),
+            message: e.to_string(),
+        })?
+        .json()
+        .await
+        .map_err(|e| DaemonError::Malformed(e.to_string()))?;
+    let header = resp
+        .get("result")
+        .and_then(|r| r.get("block_header"))
+        .ok_or_else(|| DaemonError::Malformed("missing block header".to_string()))?;
+    let hash_hex = header
+        .get("hash")
+        .and_then(|h| h.as_str())
+        .ok_or_else(|| DaemonError::Malformed("missing block hash".to_string()))?;
+    let hash: [u8; 32] = hex::decode(hash_hex)
+        .map_err(|e| DaemonError::Malformed(format!("bad block hash: {e}")))?
+        .try_into()
+        .map_err(|_| DaemonError::Malformed("bad block hash length".to_string()))?;
+    let timestamp = header
+        .get("timestamp")
+        .and_then(|t| t.as_u64())
+        .unwrap_or(0);
+    Ok((hash, timestamp))
+}
+
+/// Describe how stale a tip timestamp is, if known. Returns `None` for
+/// fresh tips (< 30 min) and unknown timestamps (0); otherwise a
+/// human age like "3h 12m".
+pub fn tip_staleness(tip_timestamp: u64, now_secs: u64) -> Option<String> {
+    const STALE_AFTER_SECS: u64 = 30 * 60;
+    if tip_timestamp == 0 || now_secs <= tip_timestamp {
+        return None;
+    }
+    let age = now_secs - tip_timestamp;
+    if age < STALE_AFTER_SECS {
+        return None;
+    }
+    let desc = if age < 3600 {
+        format!("{}m", age / 60)
+    } else if age < 86400 {
+        format!("{}h {}m", age / 3600, age % 3600 / 60)
+    } else {
+        format!("{}d {}h", age / 86400, age % 86400 / 3600)
+    };
+    Some(desc)
+}
 /// Confirm the commitment for `expected_commitment` is present in the
 /// transaction's `tx_extra` **and** the transaction is confirmed. Returns
 /// the chain-reported block height. Mempool transactions fail with
@@ -366,4 +435,30 @@ pub async fn verify_anchor_for_version(
         chain_height: tip,
         block_timestamp,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tip_staleness_flags_old_tips_only() {
+        let now = 1_760_000_000u64;
+        // Fresh (< 30 min) and unknown (0) pass silently.
+        assert_eq!(tip_staleness(now - 60, now), None);
+        assert_eq!(tip_staleness(now - 29 * 60, now), None);
+        assert_eq!(tip_staleness(0, now), None);
+        // Future timestamps (clock skew) are not "stale".
+        assert_eq!(tip_staleness(now + 60, now), None);
+        // Stale tips name their age.
+        assert_eq!(tip_staleness(now - 3600, now).as_deref(), Some("1h 0m"));
+        assert_eq!(
+            tip_staleness(now - 3 * 3600 - 12 * 60, now).as_deref(),
+            Some("3h 12m")
+        );
+        assert_eq!(
+            tip_staleness(now - 2 * 86400, now).as_deref(),
+            Some("2d 0h")
+        );
+    }
 }

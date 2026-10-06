@@ -96,6 +96,20 @@ fn json_output_is_single_line_json() {
     let v: serde_json::Value = serde_json::from_str(line.trim()).unwrap();
     assert_eq!(v["ok"], true);
     assert_eq!(v["pending"], true);
+    // Contract: pending output is never final and always warns.
+    assert_eq!(v["final"], false, "pending stamp must not be final");
+    assert_eq!(v["offline"], true);
+    assert!(v["network"].is_string(), "network must be a string");
+    assert!(v["root"].is_string(), "root must be hex");
+    let warnings = v["warnings"].as_array().expect("warnings must be an array");
+    assert!(!warnings.is_empty(), "pending stamp must warn");
+    assert!(
+        v["proofs"]
+            .as_array()
+            .expect("proofs must be an array")
+            .len()
+            == 1
+    );
 
     let verify = Command::new(bin())
         .args([
@@ -112,4 +126,62 @@ fn json_output_is_single_line_json() {
     assert_eq!(line.lines().count(), 1, "verify --json must print one line");
     let v: serde_json::Value = serde_json::from_str(line.trim()).unwrap();
     assert_eq!(v["ok"], true);
+    // Contract: pending output is anchored:false, final:false, warned,
+    // and carries no chain_checked (that field belongs to anchored but
+    // unchecked proofs).
+    assert_eq!(v["anchored"], false);
+    assert!(
+        v.get("chain_checked").is_none(),
+        "pending has no chain check"
+    );
+    assert_eq!(v["final"], false, "unchecked proof must not be final");
+    let warnings = v["warnings"].as_array().expect("warnings must be an array");
+    assert!(!warnings.is_empty(), "unchecked proof must warn");
+    assert!(v["file_hash"].is_string());
+    assert!(v["root"].is_string());
+}
+
+#[test]
+fn json_errors_are_json_on_stdout_and_human_on_stderr() {
+    use std::process::Command;
+    // Missing input file: stamp --json must exit 1 with a JSON error
+    // document on stdout (not silence) and the human message on stderr.
+    let missing = Command::new(bin())
+        .args([
+            "stamp",
+            "/nonexistent-xmrts-test-file",
+            "--json",
+            "--offline",
+        ])
+        .output()
+        .unwrap();
+    assert!(!missing.status.success());
+    let out = String::from_utf8(missing.stdout).unwrap();
+    assert_eq!(out.lines().count(), 1, "error must be one JSON line");
+    let v: serde_json::Value = serde_json::from_str(out.trim()).unwrap();
+    assert_eq!(v["ok"], false);
+    assert!(v["error"].is_string(), "error must carry a message");
+    assert!(
+        !String::from_utf8(missing.stderr).unwrap().trim().is_empty(),
+        "human error must reach stderr"
+    );
+
+    // Missing proof file: same contract for verify --json.
+    let dir = tempfile::tempdir().unwrap();
+    let f = dir.path().join("f.txt");
+    std::fs::write(&f, b"hello").unwrap();
+    let bad = Command::new(bin())
+        .args([
+            "verify",
+            f.to_str().unwrap(),
+            dir.path().join("nope.xmrts").to_str().unwrap(),
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert!(!bad.status.success());
+    let out = String::from_utf8(bad.stdout).unwrap();
+    let v: serde_json::Value = serde_json::from_str(out.trim()).unwrap();
+    assert_eq!(v["ok"], false);
+    assert!(v["error"].is_string());
 }

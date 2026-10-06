@@ -190,22 +190,15 @@ pub async fn run(args: &VerifyArgs, verbose: bool, stagenet: bool) -> Result<()>
                 }
             }
             if args.json {
-                print_json(&serde_json::json!({
-                    "ok": true, "anchored": true, "chain_checked": true,
-                    "final": is_final,
-                    "warnings": warnings,
-                    "min_confirmations": min_conf,
-                    "file_hash": hex::encode(file_hash),
-                    "root": hex::encode(proof.root),
-                    "txid": hex::encode(proof.txid),
-                    "block_height": anchor.height,
-                    "block_hash": hex::encode(proof.block_hash),
-                    "block_time": crate::wallet::daemon::format_block_time(anchor.block_timestamp),
-                    "confirmations": anchor.confirmations,
-                    "network": proof.network.as_str(),
-                    "daemon": daemons_used.first().cloned().unwrap_or_default(),
-                    "daemons": daemons_used,
-                }));
+                print_json(&anchored_json(
+                    &file_hash,
+                    &proof,
+                    &anchor,
+                    &warnings,
+                    min_conf,
+                    is_final,
+                    &daemons_used,
+                ));
             }
         }
         Err(e) => {
@@ -248,6 +241,36 @@ fn merge_quorum(
         anchor.confirmations = anchor.confirmations.min(other.confirmations);
     }
     Ok(anchor)
+}
+
+/// Machine-readable anchored-verdict document. Built by a pure function
+/// so the field contract (types included) is pinned by unit tests:
+/// automation parses stdout, so fields must never silently change shape.
+fn anchored_json(
+    file_hash: &[u8; 32],
+    proof: &Proof,
+    anchor: &crate::wallet::daemon::AnchorCheck,
+    warnings: &[String],
+    min_conf: u64,
+    is_final: bool,
+    daemons: &[String],
+) -> serde_json::Value {
+    serde_json::json!({
+        "ok": true, "anchored": true, "chain_checked": true,
+        "final": is_final,
+        "warnings": warnings,
+        "min_confirmations": min_conf,
+        "file_hash": hex::encode(file_hash),
+        "root": hex::encode(proof.root),
+        "txid": hex::encode(proof.txid),
+        "block_height": anchor.height,
+        "block_hash": hex::encode(proof.block_hash),
+        "block_time": crate::wallet::daemon::format_block_time(anchor.block_timestamp),
+        "confirmations": anchor.confirmations,
+        "network": proof.network.as_str(),
+        "daemon": daemons.first().cloned().unwrap_or_default(),
+        "daemons": daemons,
+    })
 }
 
 fn print_json(v: &serde_json::Value) {
@@ -395,5 +418,79 @@ mod tests {
         let b = anchor_at(101, 0xab, 11);
         let err = merge_quorum(&daemons(), vec![a, b], "txid").unwrap_err();
         assert!(format!("{err:#}").contains("Daemons disagree"));
+    }
+
+    fn anchored_proof() -> Proof {
+        Proof::new(
+            crate::protocol::proof::Network::Mainnet,
+            [0x11u8; 32],
+            0,
+            1,
+            [0x22u8; 32],
+            [0x33u8; 32],
+            3_000_090,
+            [0xabu8; 32],
+            vec![],
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn anchored_json_shape_is_stable() {
+        let proof = anchored_proof();
+        let anchor = anchor_at(3_000_090, 0xab, 12);
+        let warnings = vec!["w1".to_string()];
+        let v = anchored_json(
+            &[0x11u8; 32],
+            &proof,
+            &anchor,
+            &warnings,
+            10,
+            true,
+            &daemons(),
+        );
+        // Booleans.
+        assert_eq!(v["ok"], true);
+        assert_eq!(v["anchored"], true);
+        assert_eq!(v["chain_checked"], true);
+        assert_eq!(v["final"], true);
+        // Numbers.
+        assert_eq!(v["min_confirmations"], 10);
+        assert_eq!(v["block_height"], 3_000_090);
+        assert_eq!(v["confirmations"], 12);
+        // Strings.
+        assert_eq!(v["network"], "mainnet");
+        assert_eq!(v["daemon"], "http://a:18081");
+        assert!(v["file_hash"].is_string());
+        assert!(v["root"].is_string());
+        assert!(v["txid"].is_string());
+        assert!(v["block_hash"].is_string());
+        assert!(v["block_time"].is_string());
+        // Arrays.
+        assert_eq!(v["warnings"], serde_json::json!(["w1"]));
+        assert_eq!(
+            v["daemons"],
+            serde_json::json!(["http://a:18081", "http://b:18081"])
+        );
+    }
+
+    #[test]
+    fn anchored_json_marks_weak_proofs_not_final() {
+        let proof = anchored_proof();
+        let shallow = anchor_at(3_000_090, 0xab, 2);
+        let v = anchored_json(
+            &[0x11u8; 32],
+            &proof,
+            &shallow,
+            &["Only 2 confirmation(s)".to_string()],
+            10,
+            false,
+            &daemons()[..1],
+        );
+        assert_eq!(v["ok"], true);
+        assert_eq!(v["anchored"], true);
+        assert_eq!(v["final"], false);
+        assert_eq!(v["confirmations"], 2);
+        assert!(!v["warnings"].as_array().unwrap().is_empty());
     }
 }

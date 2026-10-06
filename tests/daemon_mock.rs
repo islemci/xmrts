@@ -153,6 +153,9 @@ fn rx(root_hex: &str) -> String {
 
 async fn setup() -> (String, String, [u8; 32], [u8; 32]) {
     // Returns (endpoint, txid_hex, root, block_hash).
+    // Mock follows real monerod semantics: `get_info.height` is the chain
+    // length (top block height + 1). Tx at 3_000_090 with tip 3_000_100
+    // (top 3_000_099) has exactly 10 confirmations.
     let root = [0x42u8; 32];
     let block_hash = [0xabu8; 32];
     let txid = [0x11u8; 32];
@@ -184,10 +187,54 @@ async fn correct_tx_and_block_verifies() {
     assert_eq!(anchor.height, 3_000_090);
     assert_eq!(anchor.block_hash, block_hash);
     assert_eq!(anchor.block_timestamp, 1760000000u64);
+    // tip 3_000_100 (chain length) minus tx 3_000_090 = 10 confirmations.
+    // This is the off-by-one regression: the old `tip - height + 1`
+    // formula reported 11 here.
+    assert_eq!(anchor.confirmations, 10);
     assert_eq!(
         xmrts::wallet::daemon::format_block_time(1760000000),
         "2025-10-09 08:53 UTC"
     );
+}
+
+#[tokio::test]
+async fn top_block_has_one_confirmation() {
+    // Real monerod semantics: tx in the current top block has exactly 1
+    // confirmation. tip (chain length) = tx_height + 1.
+    let root = [0x42u8; 32];
+    let block_hash = [0xabu8; 32];
+    let txid_hex = hex::encode([0x44u8; 32]);
+    let extra = xmrts::protocol::commitment::build_tx_extra_hex(&root);
+    let state = Arc::new(Mutex::new({
+        let mut s = MockState::new("mainnet", 5_000_101);
+        s.txs.insert(txid_hex.clone(), (extra, 5_000_100));
+        s.headers.insert(5_000_100, hex::encode(block_hash));
+        s
+    }));
+    let endpoint = start_mock(state).await;
+    let anchor = xmrts::wallet::daemon::verify_anchor(
+        &endpoint,
+        &txid_hex,
+        &root,
+        5_000_100,
+        &block_hash,
+        "mainnet",
+    )
+    .await
+    .expect("top-block anchor must verify");
+    assert_eq!(anchor.confirmations, 1);
+    assert!(anchor.confirmations < xmrts::wallet::daemon::MIN_CONFIRMATIONS);
+}
+
+#[test]
+fn confirmations_math_follows_chain_length_semantics() {
+    use xmrts::wallet::daemon::confirmations;
+    // tip is get_info.height = top + 1.
+    assert_eq!(confirmations(5_000_101, 5_000_100), 1);
+    assert_eq!(confirmations(3_000_100, 3_000_090), 10);
+    assert_eq!(confirmations(3_000_110, 3_000_090), 20);
+    // Lagging daemon (tip <= height) floors at 1, never 0.
+    assert_eq!(confirmations(1_000_100, 1_000_100), 1);
 }
 
 #[tokio::test]
@@ -260,13 +307,14 @@ async fn mempool_tx_is_unconfirmed() {
 
 #[tokio::test]
 async fn shallow_confirmation_reports_low_depth() {
-    // Tip at the anchor height → confirmations = 1 < 2.
+    // Tx in the top block: tip (chain length) = height + 1 → 1 confirmation.
+    // Must stay below MIN_CONFIRMATIONS (10).
     let root = [0x42u8; 32];
     let block_hash = [0xabu8; 32];
     let txid_hex = hex::encode([0x33u8; 32]);
     let extra = xmrts::protocol::commitment::build_tx_extra_hex(&root);
     let state = Arc::new(Mutex::new({
-        let mut s = MockState::new("mainnet", 1_000_100);
+        let mut s = MockState::new("mainnet", 1_000_101);
         s.txs.insert(txid_hex.clone(), (extra, 1_000_100));
         s.headers.insert(1_000_100, hex::encode(block_hash));
         s

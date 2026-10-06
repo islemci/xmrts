@@ -327,7 +327,7 @@ pub async fn run(args: &StampArgs, verbose: bool, stagenet: bool) -> Result<()> 
         super::ui::note("Skipping wait. Proofs stay pending.");
         (0u64, [0u8; 32])
     } else {
-        super::ui::note("Your transaction will be completed in around 3 minutes.");
+        super::ui::note("Monero averages a block every ~2 minutes; anchoring needs 10 confirmations (~20 minutes).");
         let bar = super::ui::spinner("Waiting for block...");
         let found = wait_for_confirmation(&client, &tx_hash, &bar).await;
         super::ui::abandon(&bar);
@@ -380,8 +380,8 @@ pub async fn run(args: &StampArgs, verbose: bool, stagenet: bool) -> Result<()> 
                     } else {
                         match crate::wallet::daemon::block_hash(&d, chain_height).await {
                             Ok(bh) => {
-                                // Depth gate: wait for the second confirmation
-                                // instead of going pending at depth 1.
+                                // Depth gate: wait for MIN_CONFIRMATIONS burial
+                                // instead of anchoring at depth 1.
                                 let bar = super::ui::spinner("Waiting for confirmations...");
                                 let depth = wait_for_depth(&d, chain_height, &bar).await;
                                 super::ui::abandon(&bar);
@@ -513,7 +513,7 @@ async fn wait_for_confirmation(
         let elapsed = (i + 1) * STEP_SECS;
         let remain = (ROUNDS - i - 1) * STEP_SECS;
         progress.set_message(format!(
-            "Waiting for block... {elapsed}s in, ~{remain}s left (around 3 minutes total)"
+            "Waiting for block... {elapsed}s in, ~{remain}s left (blocks average ~2 min; up to ~10 min wait)"
         ));
         if let Ok(v) = crate::wallet::rpc::get_transfer_by_txid(client, txid).await {
             let h = v
@@ -531,14 +531,16 @@ async fn wait_for_confirmation(
 }
 
 /// Poll the daemon until `block_height` is buried `MIN_CONFIRMATIONS`
-/// deep (up to ~8 minutes). Returns the depth reached.
+/// deep (up to ~20 minutes for MIN=10 at ~2 min/block). Returns the depth
+/// reached; callers stay pending when it is still shallow.
 async fn wait_for_depth(daemon: &str, block_height: u64, progress: &indicatif::ProgressBar) -> u64 {
-    const ROUNDS: u64 = 96;
+    const ROUNDS: u64 = 240;
     const STEP_SECS: u64 = 5;
     let mut depth = 1;
     for i in 0..ROUNDS {
         if let Ok((_, tip)) = crate::wallet::daemon::get_info(daemon).await {
-            depth = tip.saturating_sub(block_height).saturating_add(1);
+            // `get_info.height` is the chain length (top + 1): no +1 here.
+            depth = crate::wallet::daemon::confirmations(tip, block_height);
             if depth >= crate::wallet::daemon::MIN_CONFIRMATIONS {
                 return depth;
             }

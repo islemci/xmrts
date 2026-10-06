@@ -121,10 +121,12 @@ async fn finalize_one(
         .await
         .map_err(|e| anyhow::anyhow!("Block hash missed ({e}). Staying pending; retry later"))?;
     // H3: depth gate — only anchor when buried deep enough.
+    // `get_info.height` is the chain length (top + 1), so depth is
+    // `tip - height` with no +1 (see `daemon::confirmations`).
     let (_, tip) = crate::wallet::daemon::get_info(&daemon)
         .await
         .map_err(|e| anyhow::anyhow!("Chain tip unknown ({e}). Staying pending; retry later"))?;
-    let confirmations = tip.saturating_sub(height).saturating_add(1);
+    let confirmations = crate::wallet::daemon::confirmations(tip, height);
     if confirmations < crate::wallet::daemon::MIN_CONFIRMATIONS {
         anyhow::bail!(
             "Only {confirmations} confirmation(s); want {}+. Staying pending; run `xmrts finalize` later",

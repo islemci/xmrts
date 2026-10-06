@@ -6,9 +6,29 @@
 use thiserror::Error;
 
 /// Minimum confirmations before a proof counts as anchored.
-/// Two confirmations: cheap resistance to single-block reorgs while keeping
-/// stamps fast (around 3 minutes). Depth 1 is never final.
-pub const MIN_CONFIRMATIONS: u64 = 2;
+///
+/// Ten confirmations, matching Monero's own 10-block output lock. On
+/// 2025-09-14 mainnet saw an 18-block reorg (heights 3_499_659..3_499_676)
+/// that orphaned ~115-118 transactions and overwhelmed the 10-block lock;
+/// post-incident guidance treats 10 as a *minimum* and recommends 20+ for
+/// high-value settlement (Kraken moved to 720 for deposits). Timestamps
+/// are long-lived, so 10 is the floor here: `verify --json` reports
+/// `"final": false` below it, and callers needing stronger finality
+/// should wait for 20+ before relying on a proof.
+/// Depth 1 is never final.
+///
+/// Note on arithmetic: daemon `get_info.height` is the chain *length*
+/// (top block height + 1), so `confirmations = tip - tx_height`. A tx in
+/// the current top block has exactly 1 confirmation.
+pub const MIN_CONFIRMATIONS: u64 = 10;
+
+/// Confirmations for a tx at `tx_height` given daemon `get_info.height`
+/// (`tip`, the chain length = top height + 1). A tx in the top block has
+/// exactly 1 confirmation. Floor is 1 for any confirmed tx: a `tip <=
+/// tx_height` reading means the daemon lags or raced, not zero burial.
+pub fn confirmations(tip: u64, tx_height: u64) -> u64 {
+    tip.saturating_sub(tx_height).max(1)
+}
 
 #[derive(Debug, Error)]
 pub enum DaemonError {
@@ -338,7 +358,7 @@ pub async fn verify_anchor_for_version(
             daemon_net,
         });
     }
-    let confirmations = tip.saturating_sub(chain_height).saturating_add(1).max(1);
+    let confirmations = confirmations(tip, chain_height);
     Ok(AnchorCheck {
         height: chain_height,
         block_hash: header_hash,

@@ -20,11 +20,14 @@ xmrts doctor
 xmrts --help
 ```
 
-Your transaction will be completed in around 3 minutes: `stamp` waits for
-the transaction to confirm and bury 2 deep, then writes anchored proofs.
+Monero averages a block every ~2 minutes and `stamp` waits for 10
+confirmations (~20 minutes) before writing anchored proofs, matching
+Monero's own 10-block output lock. (On 2025-09-14 mainnet saw an 18-block
+reorg that overwhelmed 10 confirmations, so treat 10 as a minimum and wait
+for 20+ before relying on high-value timestamps.)
 If confirmation isn't seen in time, `stamp` leaves pending proofs plus a
 recovery record, and `xmrts finalize` upgrades them to anchored proofs
-once the transaction confirms.
+once the transaction confirms and buries deep enough.
 
 ## Managed sidecar
 

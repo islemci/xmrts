@@ -4,6 +4,7 @@
 pub mod connect;
 pub mod doctor;
 pub mod finalize;
+pub mod generate;
 pub mod init;
 pub mod pending;
 pub mod setting;
@@ -48,6 +49,8 @@ pub enum Command {
     Finalize(finalize::FinalizeArgs),
     /// List pending stamps or clean up records whose files are gone.
     Pending(pending::PendingArgs),
+    /// Print shell completions or a man page to stdout.
+    Generate(generate::GenerateArgs),
     /// Manage the monero-wallet-rpc sidecar (start/stop/status).
     Wallet(wallet::WalletArgs),
     /// Read and modify settings (price, currency, endpoint, ...).

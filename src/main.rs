@@ -18,6 +18,7 @@ async fn main() -> Result<()> {
         Command::Doctor(args) => xmrts::cli::doctor::run(args, cli.verbose, cli.stagenet).await,
         Command::Finalize(args) => xmrts::cli::finalize::run(args, cli.verbose, cli.stagenet).await,
         Command::Pending(args) => xmrts::cli::pending::run(args),
+        Command::Generate(args) => xmrts::cli::generate::run(args),
         Command::Wallet(args) => xmrts::cli::wallet::run(args, cli.verbose).await,
         Command::Setting(args) => xmrts::cli::setting::run(args),
     };

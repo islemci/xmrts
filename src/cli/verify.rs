@@ -21,6 +21,10 @@ pub struct VerifyArgs {
     /// Daemon address for tx lookup.
     #[arg(long)]
     pub daemon: Option<String>,
+    /// Required confirmations before a proof counts as final (default 10).
+    /// Higher (e.g. 20+) is safer for high-value timestamps.
+    #[arg(long)]
+    pub min_confirmations: Option<u64>,
     /// Machine-readable JSON on stdout (human lines suppressed).
     #[arg(long)]
     pub json: bool,
@@ -30,6 +34,7 @@ pub async fn run(args: &VerifyArgs, verbose: bool, stagenet: bool) -> Result<()>
     if args.json {
         super::ui::set_quiet(true);
     }
+    let min_conf = super::stamp::resolve_min_confirmations(args.min_confirmations)?;
     let raw =
         std::fs::read(&args.proof).with_context(|| format!("Reading {}", args.proof.display()))?;
     let proof = match Proof::from_bytes(&raw) {
@@ -135,11 +140,10 @@ pub async fn run(args: &VerifyArgs, verbose: bool, stagenet: bool) -> Result<()>
             // stderr in human mode but is suppressed in `--json` mode,
             // so JSON must carry them or automation sees a clean success.
             let mut warnings: Vec<String> = transport_warnings;
-            if anchor.confirmations < crate::wallet::daemon::MIN_CONFIRMATIONS {
+            if anchor.confirmations < min_conf {
                 let w = format!(
-                    "Only {} confirmation(s); want {}+. Reorg risk: wait before relying on this. (Sep 2025 saw an 18-block reorg; consider 20+ for high value.)",
+                    "Only {} confirmation(s); want {min_conf}+. Reorg risk: wait before relying on this. (Sep 2025 saw an 18-block reorg; consider 20+ for high value.)",
                     anchor.confirmations,
-                    crate::wallet::daemon::MIN_CONFIRMATIONS
                 );
                 super::ui::warn(&w);
                 warnings.push(w);
@@ -153,7 +157,7 @@ pub async fn run(args: &VerifyArgs, verbose: bool, stagenet: bool) -> Result<()>
             // `final` means buried deep enough on mainnet over a trusted
             // transport. Anything else is anchored but not final.
             let insecure = warnings.iter().any(|w| w.contains("without TLS"));
-            let is_final = anchor.confirmations >= crate::wallet::daemon::MIN_CONFIRMATIONS
+            let is_final = anchor.confirmations >= min_conf
                 && proof.network == crate::protocol::proof::Network::Mainnet
                 && !insecure;
             // L2+UX1: lead with time, then list what was trusted.
@@ -186,7 +190,7 @@ pub async fn run(args: &VerifyArgs, verbose: bool, stagenet: bool) -> Result<()>
                     "ok": true, "anchored": true, "chain_checked": true,
                     "final": is_final,
                     "warnings": warnings,
-                    "min_confirmations": crate::wallet::daemon::MIN_CONFIRMATIONS,
+                    "min_confirmations": min_conf,
                     "file_hash": hex::encode(file_hash),
                     "root": hex::encode(proof.root),
                     "txid": hex::encode(proof.txid),

@@ -19,6 +19,9 @@ pub struct FinalizeArgs {
     /// Daemon address for chain checks.
     #[arg(long)]
     pub daemon: Option<String>,
+    /// Required confirmations before proofs count as anchored (default 10).
+    #[arg(long)]
+    pub min_confirmations: Option<u64>,
     /// Finish every pending stamp, one after another.
     #[arg(long)]
     pub all: bool,
@@ -27,6 +30,7 @@ pub struct FinalizeArgs {
 pub async fn run(args: &FinalizeArgs, verbose: bool, stagenet: bool) -> Result<()> {
     let _ = verbose;
     let _ = connection::ensure_dirs();
+    let min_conf = super::stamp::resolve_min_confirmations(args.min_confirmations)?;
     super::ui::header("◆", "Finalize");
     if args.all && args.pending.is_some() {
         anyhow::bail!("Use --all or name one pending. Not both.");
@@ -38,7 +42,7 @@ pub async fn run(args: &FinalizeArgs, verbose: bool, stagenet: bool) -> Result<(
         }
         let mut failures: Vec<String> = Vec::new();
         for p in &all {
-            match finalize_one(p, args.daemon.as_deref(), stagenet).await {
+            match finalize_one(p, args.daemon.as_deref(), stagenet, min_conf).await {
                 Ok(()) => {}
                 Err(e) => failures.push(format!("{}: {e:#}", p.display())),
             }
@@ -70,13 +74,14 @@ pub async fn run(args: &FinalizeArgs, verbose: bool, stagenet: bool) -> Result<(
             }
         },
     };
-    finalize_one(&pending_path, args.daemon.as_deref(), stagenet).await
+    finalize_one(&pending_path, args.daemon.as_deref(), stagenet, min_conf).await
 }
 
 async fn finalize_one(
     pending_path: &std::path::Path,
     daemon_opt: Option<&str>,
     stagenet: bool,
+    min_conf: u64,
 ) -> Result<()> {
     let op = pending::load(pending_path)?;
     if op.txid.is_empty() {
@@ -127,10 +132,9 @@ async fn finalize_one(
         .await
         .map_err(|e| anyhow::anyhow!("Chain tip unknown ({e}). Staying pending; retry later"))?;
     let confirmations = crate::wallet::daemon::confirmations(tip, height);
-    if confirmations < crate::wallet::daemon::MIN_CONFIRMATIONS {
+    if confirmations < min_conf {
         anyhow::bail!(
-            "Only {confirmations} confirmation(s); want {}+. Staying pending; run `xmrts finalize` later",
-            crate::wallet::daemon::MIN_CONFIRMATIONS
+            "Only {confirmations} confirmation(s); want {min_conf}+. Staying pending; run `xmrts finalize` later"
         );
     }
 

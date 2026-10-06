@@ -49,9 +49,24 @@ pub struct StampArgs {
     /// Daemon address for chain checks, like http://127.0.0.1:18081
     #[arg(long)]
     pub daemon: Option<String>,
+    /// Required confirmations before proofs count as anchored (default 10).
+    /// Lower (e.g. 2) anchors in minutes but dies on shallow reorgs;
+    /// higher (e.g. 20+) is safer for high-value timestamps.
+    #[arg(long)]
+    pub min_confirmations: Option<u64>,
     /// Machine-readable JSON summary on stdout (human lines suppressed).
     #[arg(long)]
     pub json: bool,
+}
+
+/// Effective depth gate: `--min-confirmations` or MIN_CONFIRMATIONS.
+/// Rejects 0: a proof buried zero deep proves nothing about time.
+pub(crate) fn resolve_min_confirmations(opt: Option<u64>) -> Result<u64> {
+    match opt {
+        Some(0) => anyhow::bail!("--min-confirmations must be at least 1."),
+        Some(n) => Ok(n),
+        None => Ok(crate::wallet::daemon::MIN_CONFIRMATIONS),
+    }
 }
 
 pub async fn run(args: &StampArgs, verbose: bool, stagenet: bool) -> Result<()> {
@@ -59,6 +74,7 @@ pub async fn run(args: &StampArgs, verbose: bool, stagenet: bool) -> Result<()> 
         super::ui::set_quiet(true);
     }
     let _ = connection::ensure_dirs();
+    let min_conf = resolve_min_confirmations(args.min_confirmations)?;
     if args.files.is_empty() {
         anyhow::bail!("No files given.");
     }
@@ -332,7 +348,10 @@ pub async fn run(args: &StampArgs, verbose: bool, stagenet: bool) -> Result<()> 
         super::ui::note("Skipping wait. Proofs stay pending.");
         (0u64, [0u8; 32])
     } else {
-        super::ui::note("Monero averages a block every ~2 minutes; anchoring needs 10 confirmations (~20 minutes).");
+        super::ui::note(&format!(
+            "Monero averages a block every ~2 minutes; anchoring needs {min_conf} confirmation(s) (~{} minutes).",
+            min_conf * 2
+        ));
         let bar = super::ui::spinner("Waiting for block...");
         let found = wait_for_confirmation(&client, &tx_hash, &bar).await;
         super::ui::abandon(&bar);
@@ -388,12 +407,11 @@ pub async fn run(args: &StampArgs, verbose: bool, stagenet: bool) -> Result<()> 
                                 // Depth gate: wait for MIN_CONFIRMATIONS burial
                                 // instead of anchoring at depth 1.
                                 let bar = super::ui::spinner("Waiting for confirmations...");
-                                let depth = wait_for_depth(&d, chain_height, &bar).await;
+                                let depth = wait_for_depth(&d, chain_height, min_conf, &bar).await;
                                 super::ui::abandon(&bar);
-                                if depth < crate::wallet::daemon::MIN_CONFIRMATIONS {
+                                if depth < min_conf {
                                     super::ui::note(&format!(
-                                        "Only {depth} confirmation(s); want {}+. Proofs stay pending until deep enough.",
-                                        crate::wallet::daemon::MIN_CONFIRMATIONS
+                                        "Only {depth} confirmation(s); want {min_conf}+. Proofs stay pending until deep enough."
                                     ));
                                     super::ui::hint("Run `xmrts finalize` once it buries deeper.");
                                     (0u64, [0u8; 32])
@@ -604,25 +622,30 @@ async fn wait_for_confirmation(
     None
 }
 
-/// Poll the daemon until `block_height` is buried `MIN_CONFIRMATIONS`
-/// deep (up to ~20 minutes for MIN=10 at ~2 min/block). Returns the depth
-/// reached; callers stay pending when it is still shallow.
-async fn wait_for_depth(daemon: &str, block_height: u64, progress: &indicatif::ProgressBar) -> u64 {
-    const ROUNDS: u64 = 240;
+/// Poll the daemon until `block_height` is buried `min_conf` deep
+/// (~2 minutes per confirmation at 5s polls: 24 rounds each). Returns
+/// the depth reached; callers stay pending when it is still shallow.
+async fn wait_for_depth(
+    daemon: &str,
+    block_height: u64,
+    min_conf: u64,
+    progress: &indicatif::ProgressBar,
+) -> u64 {
     const STEP_SECS: u64 = 5;
+    // ~2 min/block of polling per required confirmation (24 x 5s).
+    let rounds: u64 = min_conf.saturating_mul(24).max(24);
     let mut depth = 1;
-    for i in 0..ROUNDS {
+    for i in 0..rounds {
         if let Ok((_, tip)) = crate::wallet::daemon::get_info(daemon).await {
             // `get_info.height` is the chain length (top + 1): no +1 here.
             depth = crate::wallet::daemon::confirmations(tip, block_height);
-            if depth >= crate::wallet::daemon::MIN_CONFIRMATIONS {
+            if depth >= min_conf {
                 return depth;
             }
         }
-        let remain = (ROUNDS - i - 1) * STEP_SECS;
+        let remain = (rounds - i - 1) * STEP_SECS;
         progress.set_message(format!(
-            "Waiting for confirmations... {depth}/{} (~{remain}s left)",
-            crate::wallet::daemon::MIN_CONFIRMATIONS,
+            "Waiting for confirmations... {depth}/{min_conf} (~{remain}s left)"
         ));
         tokio::time::sleep(std::time::Duration::from_secs(STEP_SECS)).await;
     }

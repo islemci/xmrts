@@ -178,9 +178,12 @@ fn create_dir_0700(dir: &std::path::Path) -> std::io::Result<()> {
     use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
     let mut b = std::fs::DirBuilder::new();
     b.recursive(true).mode(0o700);
-    let _ = b.create(dir);
+    // Propagate errors: a config dir that cannot be created (read-only
+    // $HOME, permission denied) must fail loudly, not silently run with
+    // no config.
+    b.create(dir)?;
     // Harden pre-existing dirs too (cheap, idempotent).
-    let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700));
+    std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
     Ok(())
 }
 
@@ -232,7 +235,12 @@ pub fn atomic_write_0600(path: &std::path::Path, bytes: &[u8]) -> std::io::Resul
         f.sync_all()?;
         drop(f);
     }
-    std::fs::rename(&tmp, path)?;
+    if let Err(e) = std::fs::rename(&tmp, path) {
+        // Do not leave the temp file behind on rename failure (e.g.
+        // cross-device move, permission denied): best-effort cleanup.
+        let _ = std::fs::remove_file(&tmp);
+        return Err(e);
+    }
     // Best-effort dir fsync so the rename survives a crash.
     if let Ok(d) = std::fs::File::open(parent) {
         let _ = d.sync_all();

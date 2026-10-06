@@ -185,8 +185,14 @@ fn is_loopback(host: &str) -> bool {
 /// is present, so stripping `https://` silently downgrades TLS daemons to
 /// plain HTTP (connection fails, and `transfer` later dies with
 /// `-4 Failed to get height`). Only trailing slashes are trimmed.
-pub fn strip_scheme(url: &str) -> String {
+pub fn normalize_daemon_endpoint(url: &str) -> String {
     url.trim_end_matches('/').to_string()
+}
+
+/// Deprecated alias kept for compatibility; use [`normalize_daemon_endpoint`].
+#[deprecated(note = "renamed to normalize_daemon_endpoint: it trims slashes, not the scheme")]
+pub fn strip_scheme(url: &str) -> String {
+    normalize_daemon_endpoint(url)
 }
 
 /// Resolve a runnable sidecar from config, or report why management is
@@ -214,7 +220,10 @@ pub fn resolve(cfg: &WalletConfig) -> Result<SidecarConfig, ProcessError> {
         binary,
         wallet_dir,
         bind_port: port,
-        daemon_address: cfg.daemon_endpoint.clone().map(|d| strip_scheme(&d)),
+        daemon_address: cfg
+            .daemon_endpoint
+            .clone()
+            .map(|d| normalize_daemon_endpoint(&d)),
         username: cfg.username.clone(),
         password: cfg.password.clone(),
         network_flag,

@@ -336,3 +336,95 @@ async fn shallow_confirmation_reports_low_depth() {
         "test setup must be below threshold"
     );
 }
+
+#[tokio::test]
+async fn version_byte_mismatch_fails() {
+    // Chain holds a V1 commitment (raw root); proof expects V2
+    // (size-bound). The version gate must reject, not silently accept.
+    use xmrts::protocol::merkle;
+    let top_root = [0x55u8; 32];
+    let commit_v2 = merkle::commit_root(&top_root, 3);
+    let txid_hex = hex::encode([0x66u8; 32]);
+    let block_hash = [0xabu8; 32];
+    // Daemon tx carries V1 (raw root).
+    let extra_v1 =
+        xmrts::protocol::commitment::build_tx_extra_hex_for(&top_root, merkle::MERKLE_V1);
+    let state = Arc::new(Mutex::new({
+        let mut s = MockState::new("mainnet", 2_000_110);
+        s.txs.insert(txid_hex.clone(), (extra_v1, 2_000_100));
+        s.headers.insert(2_000_100, hex::encode(block_hash));
+        s
+    }));
+    let endpoint = start_mock(state).await;
+    let r = xmrts::wallet::daemon::verify_anchor_for_version(
+        &endpoint,
+        &txid_hex,
+        &commit_v2,
+        Some(merkle::MERKLE_V2),
+        2_000_100,
+        &block_hash,
+        "mainnet",
+    )
+    .await;
+    assert!(r.is_err(), "V1 chain vs V2 proof must fail, got {r:?}");
+}
+
+#[tokio::test]
+async fn wrong_tree_size_fails_via_commitment() {
+    // V2 binds the tree size: same top root but wrong size commits
+    // differently, so the chain lookup must miss.
+    use xmrts::protocol::merkle;
+    let top_root = [0x77u8; 32];
+    let commit_size3 = merkle::commit_root(&top_root, 3);
+    let commit_size4 = merkle::commit_root(&top_root, 4);
+    assert_ne!(commit_size3, commit_size4);
+    let txid_hex = hex::encode([0x77u8; 32]);
+    let block_hash = [0xabu8; 32];
+    // Chain commits size 3; proof claims size 4's commitment.
+    let extra =
+        xmrts::protocol::commitment::build_tx_extra_hex_for(&commit_size3, merkle::MERKLE_V2);
+    let state = Arc::new(Mutex::new({
+        let mut s = MockState::new("mainnet", 2_000_110);
+        s.txs.insert(txid_hex.clone(), (extra, 2_000_100));
+        s.headers.insert(2_000_100, hex::encode(block_hash));
+        s
+    }));
+    let endpoint = start_mock(state).await;
+    let r = xmrts::wallet::daemon::verify_anchor_for_version(
+        &endpoint,
+        &txid_hex,
+        &commit_size4,
+        Some(merkle::MERKLE_V2),
+        2_000_100,
+        &block_hash,
+        "mainnet",
+    )
+    .await;
+    assert!(r.is_err(), "wrong tree size must fail, got {r:?}");
+}
+
+#[tokio::test]
+async fn reorg_moves_tx_height_fails() {
+    // Proof anchors tx at H, but after a reorg the chain puts the same
+    // txid in H+1 with a different block hash. Exact-height + hash checks
+    // must reject the stale proof; the user must re-verify at the new tip.
+    let root = [0x42u8; 32];
+    let txid_hex = hex::encode([0x88u8; 32]);
+    let extra = xmrts::protocol::commitment::build_tx_extra_hex(&root);
+    let old_hash = [0xabu8; 32];
+    let new_hash = [0xcdu8; 32];
+    let state = Arc::new(Mutex::new({
+        // Post-reorg chain: tx now at 3_000_091 under a new header.
+        let mut s = MockState::new("mainnet", 3_000_110);
+        s.txs.insert(txid_hex.clone(), (extra, 3_000_091));
+        s.headers.insert(3_000_091, hex::encode(new_hash));
+        s
+    }));
+    let endpoint = start_mock(state).await;
+    let r = xmrts::wallet::daemon::verify_anchor(
+        &endpoint, &txid_hex, &root, 3_000_090, // stale pre-reorg height
+        &old_hash, "mainnet",
+    )
+    .await;
+    assert!(r.is_err(), "reorged height must fail, got {r:?}");
+}

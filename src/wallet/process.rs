@@ -222,15 +222,44 @@ pub fn resolve(cfg: &WalletConfig) -> Result<SidecarConfig, ProcessError> {
 }
 
 impl SidecarConfig {
-    /// Real argv for spawning (contains the RPC password when configured).
-    ///
-    /// Known exposure (M3): the password travels as `--rpc-login=user:pass`
-    /// on the child command line, readable by other local users via `ps` /
-    /// `/proc/<pid>/cmdline` while the sidecar lives. The pinned
-    /// monero-wallet-rpc build has no `--config-file` path for `rpc-login`,
-    /// so argv is currently the only transport. Mitigations in place:
-    /// loopback-only bind, 0600 config file, redacted display argv. Treat
-    /// any local user as able to call the wallet RPC while it runs.
+    /// Path of the sidecar config file holding the RPC login.
+    /// `monero-wallet-rpc --config-file` is supported (same option names
+    /// as argv, `name=value` per line), so the password never appears on
+    /// argv where other local users could read it via `ps`.
+    pub fn rpc_login_conf_path() -> Option<PathBuf> {
+        super::connection::config_dir().map(|d| d.join("monero-wallet-rpc.conf"))
+    }
+
+    /// Config-file text for the RPC login (`rpc-login=user:pass`).
+    /// Returns `None` when no login is configured (sidecar runs bare).
+    pub fn rpc_login_conf_text(&self) -> Option<String> {
+        match (&self.username, &self.password) {
+            (Some(u), Some(p)) => Some(format!("rpc-login={u}:{p}\n")),
+            (Some(u), None) => Some(format!("rpc-login={u}\n")),
+            _ => None,
+        }
+    }
+
+    /// Write the RPC login to the 0600 sidecar config file. Returns the
+    /// path to pass as `--config-file`, or `None` when no login is set.
+    pub fn write_rpc_login_conf(&self) -> Result<Option<PathBuf>, ProcessError> {
+        let Some(text) = self.rpc_login_conf_text() else {
+            return Ok(None);
+        };
+        let Some(path) = Self::rpc_login_conf_path() else {
+            return Err(ProcessError::Config("no config dir".to_string()));
+        };
+        super::connection::atomic_write_0600(&path, text.as_bytes())
+            .map_err(|e| ProcessError::Config(format!("writing sidecar login conf: {e}")))?;
+        Ok(Some(path))
+    }
+
+    /// Real argv for spawning. The RPC password is NOT here: it travels
+    /// via the 0600 `--config-file` written by [`Self::write_rpc_login_conf`]
+    /// (called by `start` before spawn). `ps` / `/proc/<pid>/cmdline`
+    /// therefore expose at most `--config-file=<path>`, not the secret.
+    /// Loopback-only bind remains; treat any local user as able to call
+    /// the wallet RPC while it runs.
     pub fn spawn_args(&self) -> Vec<String> {
         let mut args = vec![
             format!("--wallet-dir={}", self.wallet_dir),
@@ -243,19 +272,24 @@ impl SidecarConfig {
         if let Some(flag) = &self.network_flag {
             args.push(flag.clone());
         }
-        if let (Some(u), Some(p)) = (&self.username, &self.password) {
-            args.push(format!("--rpc-login={u}:{p}"));
+        if let Some(path) = Self::rpc_login_conf_path() {
+            if self.username.is_some() {
+                args.push(format!("--config-file={}", path.display()));
+            }
         }
         args
     }
 
-    /// Display argv with the password redacted. Use this for all output.
+    /// Display argv with the config-file path shown but no secret.
+    /// The login lives only inside the 0600 file, never in argv, so there
+    /// is nothing to redact; keep the `<hidden>` marker for the file arg
+    /// so logs do not even leak the path layout.
     pub fn redacted_args(&self) -> Vec<String> {
         self.spawn_args()
             .into_iter()
             .map(|a| {
-                if a.starts_with("--rpc-login=") {
-                    "--rpc-login=<hidden>".to_string()
+                if a.starts_with("--config-file=") {
+                    "--config-file=<hidden>".to_string()
                 } else {
                     a
                 }
@@ -413,6 +447,9 @@ pub async fn start(cfg: &mut WalletConfig) -> Result<u32, ProcessError> {
     }
     let client = cfg.client();
     let sidecar = resolve(cfg)?;
+    // Write the 0600 login conf BEFORE spawn so `--config-file` points at
+    // a live file. The password never touches argv.
+    sidecar.write_rpc_login_conf()?;
     let log_path = SidecarConfig::logfile()
         .ok_or_else(|| ProcessError::Config("no config dir".to_string()))?;
     if let Some(parent) = log_path.parent() {
@@ -572,7 +609,7 @@ mod tests {
     }
 
     #[test]
-    fn redacts_password_everywhere() {
+    fn password_never_on_argv() {
         let sc = SidecarConfig {
             binary: PathBuf::from("/x/monero-wallet-rpc"),
             wallet_dir: "/w".to_string(),
@@ -582,11 +619,28 @@ mod tests {
             password: Some("SUPERSECRET".to_string()),
             network_flag: None,
         };
+        // Neither real nor display argv may contain the secret: it lives
+        // only in the 0600 config file passed via --config-file.
+        let real = sc.spawn_args().join(" ");
+        assert!(!real.contains("SUPERSECRET"));
+        assert!(!real.contains("--rpc-login="));
+        assert!(real.contains("--config-file="));
         let shown = sc.redacted_args().join(" ");
         assert!(!shown.contains("SUPERSECRET"));
-        assert!(shown.contains("--rpc-login=<hidden>"));
-        // The real argv still carries it (needed to start the process).
-        assert!(sc.spawn_args().join(" ").contains("SUPERSECRET"));
+        assert!(shown.contains("--config-file=<hidden>"));
+        // Conf text carries the login in `name=value` file syntax.
+        assert_eq!(
+            sc.rpc_login_conf_text().as_deref(),
+            Some("rpc-login=u:SUPERSECRET\n")
+        );
+        // No login -> no config file arg.
+        let bare = SidecarConfig {
+            username: None,
+            password: None,
+            ..sc.clone()
+        };
+        assert!(bare.rpc_login_conf_text().is_none());
+        assert!(!bare.spawn_args().join(" ").contains("--config-file="));
     }
 
     #[test]

@@ -428,3 +428,83 @@ async fn reorg_moves_tx_height_fails() {
     .await;
     assert!(r.is_err(), "reorged height must fail, got {r:?}");
 }
+
+#[tokio::test]
+async fn two_daemons_agreeing_quorum_verifies() {
+    // Quorum setup: two independent mocks holding the same anchor.
+    // Both must verify; the conservative confirmation count is the min.
+    let root = [0x42u8; 32];
+    let block_hash = [0xabu8; 32];
+    let txid_hex = hex::encode([0x99u8; 32]);
+    let extra = xmrts::protocol::commitment::build_tx_extra_hex(&root);
+    // Daemon A: tip 3_000_100 -> 10 confirmations.
+    let state_a = Arc::new(Mutex::new({
+        let mut s = MockState::new("mainnet", 3_000_100);
+        s.txs.insert(txid_hex.clone(), (extra.clone(), 3_000_090));
+        s.headers.insert(3_000_090, hex::encode(block_hash));
+        s
+    }));
+    // Daemon B: one block behind -> 9 confirmations, same anchor otherwise.
+    let state_b = Arc::new(Mutex::new({
+        let mut s = MockState::new("mainnet", 3_000_099);
+        s.txs.insert(txid_hex.clone(), (extra, 3_000_090));
+        s.headers.insert(3_000_090, hex::encode(block_hash));
+        s
+    }));
+    let a = start_mock(state_a).await;
+    let b = start_mock(state_b).await;
+    let anchor_a = xmrts::wallet::daemon::verify_anchor(
+        &a,
+        &txid_hex,
+        &root,
+        3_000_090,
+        &block_hash,
+        "mainnet",
+    )
+    .await
+    .expect("daemon A must verify");
+    let anchor_b = xmrts::wallet::daemon::verify_anchor(
+        &b,
+        &txid_hex,
+        &root,
+        3_000_090,
+        &block_hash,
+        "mainnet",
+    )
+    .await
+    .expect("daemon B must verify");
+    assert_eq!(anchor_a.height, anchor_b.height);
+    assert_eq!(anchor_a.block_hash, anchor_b.block_hash);
+    // Quorum reports the minimum: honest tips may differ by a block.
+    assert_eq!(anchor_a.confirmations.min(anchor_b.confirmations), 9);
+}
+
+#[tokio::test]
+async fn quorum_detects_split_chain() {
+    // Same txid, different block hashes on two daemons: a split view
+    // that quorum verification must refuse.
+    let root = [0x42u8; 32];
+    let txid_hex = hex::encode([0x9au8; 32]);
+    let extra = xmrts::protocol::commitment::build_tx_extra_hex(&root);
+    let hash_a = [0xabu8; 32];
+    let hash_b = [0xcdu8; 32];
+    let state_a = Arc::new(Mutex::new({
+        let mut s = MockState::new("mainnet", 3_000_100);
+        s.txs.insert(txid_hex.clone(), (extra.clone(), 3_000_090));
+        s.headers.insert(3_000_090, hex::encode(hash_a));
+        s
+    }));
+    let state_b = Arc::new(Mutex::new({
+        let mut s = MockState::new("mainnet", 3_000_100);
+        s.txs.insert(txid_hex.clone(), (extra, 3_000_090));
+        s.headers.insert(3_000_090, hex::encode(hash_b));
+        s
+    }));
+    let _a = start_mock(state_a).await;
+    let b = start_mock(state_b).await;
+    // Proof pinned to daemon A's hash fails against daemon B's chain.
+    let r =
+        xmrts::wallet::daemon::verify_anchor(&b, &txid_hex, &root, 3_000_090, &hash_a, "mainnet")
+            .await;
+    assert!(r.is_err(), "split chain must fail, got {r:?}");
+}

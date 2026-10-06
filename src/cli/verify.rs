@@ -18,9 +18,10 @@ pub struct VerifyArgs {
     /// Crypto only. Skip chain lookup.
     #[arg(long)]
     pub offline: bool,
-    /// Daemon address for tx lookup.
+    /// Daemon address for tx lookup. Repeat for a quorum: every daemon
+    /// must agree on the anchor or verification fails.
     #[arg(long)]
-    pub daemon: Option<String>,
+    pub daemon: Vec<String>,
     /// Required confirmations before a proof counts as final (default 10).
     /// Higher (e.g. 20+) is safer for high-value timestamps.
     #[arg(long)]
@@ -132,10 +133,10 @@ pub async fn run(args: &VerifyArgs, verbose: bool, stagenet: bool) -> Result<()>
     }
 
     let bar = super::ui::spinner("Checking chain...");
-    let checked = blockchain_check(&proof, args.daemon.as_deref(), stagenet).await;
+    let checked = blockchain_check(&proof, &args.daemon, stagenet).await;
     super::ui::abandon(&bar);
     match checked {
-        Ok((anchor, daemon_used, transport_warnings)) => {
+        Ok((anchor, daemons_used, transport_warnings)) => {
             // Collect machine-visible warnings. `ui::warn` prints to
             // stderr in human mode but is suppressed in `--json` mode,
             // so JSON must carry them or automation sees a clean success.
@@ -181,6 +182,9 @@ pub async fn run(args: &VerifyArgs, verbose: bool, stagenet: bool) -> Result<()>
                 super::ui::field("Block hash", &hex::encode(proof.block_hash));
                 super::ui::field("Network", proof.network.as_str());
                 super::ui::field("Confirmations", &anchor.confirmations.to_string());
+                if daemons_used.len() > 1 {
+                    super::ui::field("Daemons", &format!("{} agree", daemons_used.len()));
+                }
                 if !is_final {
                     super::ui::field("Final", "no (see warnings above)");
                 }
@@ -199,7 +203,8 @@ pub async fn run(args: &VerifyArgs, verbose: bool, stagenet: bool) -> Result<()>
                     "block_time": crate::wallet::daemon::format_block_time(anchor.block_timestamp),
                     "confirmations": anchor.confirmations,
                     "network": proof.network.as_str(),
-                    "daemon": daemon_used,
+                    "daemon": daemons_used.first().cloned().unwrap_or_default(),
+                    "daemons": daemons_used,
                 }));
             }
         }
@@ -213,6 +218,36 @@ pub async fn run(args: &VerifyArgs, verbose: bool, stagenet: bool) -> Result<()>
         }
     }
     Ok(())
+}
+
+/// Merge per-daemon anchors into one quorum verdict. Height and block
+/// hash must match exactly across all daemons; a mismatch means a
+/// reorged, lying, or stale node — fail closed, naming the outlier.
+/// Tips may honestly differ by a block, so confirmations take the
+/// minimum (conservative) instead of requiring equality.
+fn merge_quorum(
+    daemons: &[String],
+    anchors: Vec<crate::wallet::daemon::AnchorCheck>,
+    txid_hex: &str,
+) -> Result<crate::wallet::daemon::AnchorCheck> {
+    let mut it = anchors.into_iter();
+    let mut anchor = it
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("No daemon answered the chain check."))?;
+    for (daemon, other) in daemons.iter().skip(1).zip(it) {
+        if other.height != anchor.height || other.block_hash != anchor.block_hash {
+            anyhow::bail!(
+                "Daemons disagree: {} puts tx {txid_hex} at block {} ({}), but {daemon} puts it at block {} ({}). Refusing to verify against a split chain.",
+                daemons[0],
+                anchor.height,
+                hex::encode(anchor.block_hash),
+                other.height,
+                hex::encode(other.block_hash),
+            );
+        }
+        anchor.confirmations = anchor.confirmations.min(other.confirmations);
+    }
+    Ok(anchor)
 }
 
 fn print_json(v: &serde_json::Value) {
@@ -230,9 +265,9 @@ fn fail_exit_json(json: bool, err: &str) -> ! {
 
 async fn blockchain_check(
     proof: &Proof,
-    daemon_override: Option<&str>,
+    daemon_overrides: &[String],
     stagenet: bool,
-) -> Result<(crate::wallet::daemon::AnchorCheck, String, Vec<String>)> {
+) -> Result<(crate::wallet::daemon::AnchorCheck, Vec<String>, Vec<String>)> {
     let cfg = connection::load_config();
     let effective_net = if stagenet {
         "stagenet".to_string()
@@ -254,46 +289,111 @@ async fn blockchain_check(
     }
 
     let txid_hex = hex::encode(proof.txid);
-    let daemon = daemon_override
-        .map(String::from)
-        .or(cfg.daemon_endpoint.clone());
-    let Some(daemon) = daemon else {
-        anyhow::bail!(
-            "No daemon set so chain bytes stay unchecked.\nSet one with `xmrts connect --daemon http://127.0.0.1:18081`. Any local or remote node fits. Or pass --offline for crypto only."
-        );
+    let daemons: Vec<String> = if daemon_overrides.is_empty() {
+        match cfg.daemon_endpoint.clone() {
+            Some(d) => vec![d],
+            None => anyhow::bail!(
+                "No daemon set so chain bytes stay unchecked.\nSet one with `xmrts connect --daemon http://127.0.0.1:18081`. Any local or remote node fits. Or pass --offline for crypto only."
+            ),
+        }
+    } else {
+        daemon_overrides.to_vec()
     };
-    // M1: one remote daemon decides the result. Warn on plain-HTTP
-    // non-loopback transport (response could be tampered in flight).
-    // Returned in the warnings vec too so `--json` automation sees it.
+    // Quorum: every daemon is checked independently and all must agree
+    // on (height, block hash). Tips may legitimately differ by a block
+    // between honest daemons, so confirmations are NOT compared: the
+    // minimum across daemons is reported (conservative).
     let mut warnings = Vec::new();
-    if daemon.to_ascii_lowercase().starts_with("http://")
-        && !connection::endpoint_is_loopback(&daemon)
-    {
-        let w = format!(
-            "Daemon {daemon} is remote without TLS. A network attacker could lie about the chain."
-        );
-        super::ui::warn(&w);
-        warnings.push(w);
+    let mut anchors: Vec<crate::wallet::daemon::AnchorCheck> = Vec::new();
+    for daemon in &daemons {
+        // Warn on plain-HTTP non-loopback transport (response could be
+        // tampered in flight). Returned in the warnings vec too so
+        // `--json` automation sees it.
+        if daemon.to_ascii_lowercase().starts_with("http://")
+            && !connection::endpoint_is_loopback(daemon)
+        {
+            let w = format!(
+                "Daemon {daemon} is remote without TLS. A network attacker could lie about the chain."
+            );
+            super::ui::warn(&w);
+            warnings.push(w);
+        }
+        // Full anchor check: commitment + exact height + block-hash match +
+        // daemon nettype match (H1+M1). No wallet involved (M2): verification
+        // depends only on the proof file, the original file, and daemon(s).
+        // M6: the chain holds the size-bound commitment for V2 proofs.
+        let anchor = crate::wallet::daemon::verify_anchor_for_version(
+            daemon,
+            &txid_hex,
+            &proof.expected_commitment(),
+            Some(proof.merkle_ver),
+            proof.block_height,
+            &proof.block_hash,
+            proof.network.as_str(),
+        )
+        .await
+        .map_err(|e| match e {
+            crate::wallet::daemon::DaemonError::CommitmentAbsent { .. } => anyhow::anyhow!(
+                "Tx {txid_hex} holds no mark for this file.\nIt lives but it does not anchor you. The wallet may have dropped the mark."
+            ),
+            other => anyhow::anyhow!("Daemon {daemon} says: {other}"),
+        })?;
+        anchors.push(anchor);
     }
-    // Full anchor check: commitment + exact height + block-hash match +
-    // daemon nettype match (H1+M1). No wallet involved (M2): verification
-    // depends only on the proof file, the original file, and daemon(s).
-    // M6: the chain holds the size-bound commitment for V2 proofs.
-    let anchor = crate::wallet::daemon::verify_anchor_for_version(
-        &daemon,
-        &txid_hex,
-        &proof.expected_commitment(),
-        Some(proof.merkle_ver),
-        proof.block_height,
-        &proof.block_hash,
-        proof.network.as_str(),
-    )
-    .await
-    .map_err(|e| match e {
-        crate::wallet::daemon::DaemonError::CommitmentAbsent { .. } => anyhow::anyhow!(
-            "Tx {txid_hex} holds no mark for this file.\nIt lives but it does not anchor you. The wallet may have dropped the mark."
-        ),
-        other => anyhow::anyhow!("{other}"),
-    })?;
-    Ok((anchor, daemon, warnings))
+    let anchor = merge_quorum(&daemons, anchors, &txid_hex)?;
+    Ok((anchor, daemons, warnings))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::wallet::daemon::AnchorCheck;
+
+    fn anchor_at(height: u64, hash_byte: u8, confirmations: u64) -> AnchorCheck {
+        AnchorCheck {
+            height,
+            block_hash: [hash_byte; 32],
+            confirmations,
+            chain_height: height + confirmations,
+            block_timestamp: 1760000000,
+        }
+    }
+
+    fn daemons() -> Vec<String> {
+        vec!["http://a:18081".to_string(), "http://b:18081".to_string()]
+    }
+
+    #[test]
+    fn quorum_agrees_takes_minimum_confirmations() {
+        let a = anchor_at(100, 0xab, 12);
+        let b = anchor_at(100, 0xab, 10);
+        let merged = merge_quorum(&daemons(), vec![a, b], "txid").unwrap();
+        assert_eq!(merged.height, 100);
+        assert_eq!(merged.confirmations, 10);
+    }
+
+    #[test]
+    fn quorum_single_daemon_passes_through() {
+        let a = anchor_at(100, 0xab, 12);
+        let merged = merge_quorum(&daemons()[..1], vec![a], "txid").unwrap();
+        assert_eq!(merged.confirmations, 12);
+    }
+
+    #[test]
+    fn quorum_hash_split_fails_naming_outlier() {
+        let a = anchor_at(100, 0xab, 12);
+        let b = anchor_at(100, 0xcd, 12);
+        let err = merge_quorum(&daemons(), vec![a, b], "txid").unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(msg.contains("Daemons disagree"), "{msg}");
+        assert!(msg.contains("http://b:18081"), "{msg}");
+    }
+
+    #[test]
+    fn quorum_height_split_fails() {
+        let a = anchor_at(100, 0xab, 12);
+        let b = anchor_at(101, 0xab, 11);
+        let err = merge_quorum(&daemons(), vec![a, b], "txid").unwrap_err();
+        assert!(format!("{err:#}").contains("Daemons disagree"));
+    }
 }

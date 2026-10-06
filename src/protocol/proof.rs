@@ -367,6 +367,77 @@ mod tests {
         assert!(matches!(Proof::from_bytes(&b), Err(ProofError::BadMagic)));
     }
 
+    /// Deterministic twin of the libFuzzer target
+    /// (`fuzz/fuzz_targets/proof_from_bytes.rs`): every single-bit flip
+    /// and every truncation of valid proofs must either fail to parse
+    /// (never panic) or round-trip byte-identically. Covers the 0-sibling
+    /// (165 B) and 2-sibling (229 B) shapes.
+    #[test]
+    fn proof_parser_total_mutation_sweep() {
+        use crate::protocol::merkle::MerkleTree;
+        let hashes = vec![[0x11u8; 32], [0x22u8; 32], [0x33u8; 32]];
+        let (sorted, tree) = MerkleTree::build_from_unsorted(hashes).unwrap();
+        let mut bodies = Vec::new();
+        for (i, h) in sorted.iter().enumerate() {
+            let p = Proof::new(
+                Network::Mainnet,
+                *h,
+                i as u64,
+                3,
+                tree.root(),
+                [0xabu8; 32],
+                3_000_090,
+                [0xcdu8; 32],
+                tree.proof_for(i as u64).unwrap(),
+            )
+            .unwrap();
+            bodies.push(p.to_bytes());
+        }
+        bodies.push(
+            Proof::new(
+                Network::Mainnet,
+                [0x01u8; 32],
+                0,
+                1,
+                [0x02u8; 32],
+                [0x03u8; 32],
+                1234567,
+                [0x04u8; 32],
+                vec![],
+            )
+            .unwrap()
+            .to_bytes(),
+        );
+        for body in &bodies {
+            // Every truncation must fail (never panic, never accept).
+            for len in 0..body.len() {
+                assert!(
+                    Proof::from_bytes(&body[..len]).is_err(),
+                    "truncation to {len} bytes parsed"
+                );
+            }
+            // Every single-bit flip: reject, or accept a proof that is
+            // itself round-trip stable.
+            for (i, _) in body.iter().enumerate() {
+                for bit in 0..8 {
+                    let mut bad = body.clone();
+                    bad[i] ^= 1 << bit;
+                    match Proof::from_bytes(&bad) {
+                        Err(_) => {}
+                        Ok(p) => {
+                            let re = p.to_bytes();
+                            assert_eq!(
+                                Proof::from_bytes(&re).unwrap(),
+                                p,
+                                "accepted mutant at byte {i} bit {bit} is not round-trip stable"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     #[test]
     fn rejects_path_len_mismatch() {
         // tree_size 3 requires 2 siblings; tamper the count.

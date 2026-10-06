@@ -114,11 +114,15 @@ pub async fn run(_args: &DoctorArgs, verbose: bool, stagenet: bool) -> Result<()
     match client.get_version().await {
         Ok((maj, min)) => {
             super::ui::ok(&format!("Wallet answers (v{maj}.{min})."));
-            // The stock wallet cannot attach tx_extra; only the patched
-            // build (RPC minor >= 31) can stamp. Fail early here so the
-            // user does not pay a fee for a commitment-less tx.
+            // Hint, not proof: the patch bumps RPC minor 30 -> 31, so
+            // < (1, 31) is certainly stock. >= (1, 31) likely supports
+            // `extra`, but a later stock release could report the same;
+            // `stamp` verifies the mark in the signed tx blob before
+            // relaying, so no fee is ever spent mark-less.
             if (maj, min) >= (1, 31) {
-                super::ui::ok("Wallet supports `extra` (patched build).");
+                super::ui::ok(
+                    "Wallet reports `extra` support (v1.31+; mark verified at stamp time).",
+                );
             } else {
                 super::ui::fail(&format!(
                     "Wallet v{maj}.{min} looks stock: no `extra` support. Stamps would pay a fee with no mark."

@@ -207,9 +207,12 @@ pub async fn run(args: &StampArgs, verbose: bool, stagenet: bool) -> Result<()> 
     if verbose {
         super::ui::field("Wallet RPC", &format!("v{}.{}", version.0, version.1));
     }
-    // Guard before any fee is spent: stock wallets silently ignore the
-    // `extra` key, which would relay a mark-less tx. Only the patched
-    // build (RPC minor >= 31) can stamp.
+    // Fast hint before any work: stock wallets silently ignore the
+    // `extra` key, which would relay a mark-less tx. The patch bumps the
+    // RPC minor 30 -> 31, so < (1, 31) is certainly stock. >= (1, 31) is
+    // only a hint (a later stock release could also report 31+), so the
+    // definitive gate is the tx-blob mark check in `preview_timestamp`
+    // before relay: nothing is broadcast without the commitment bytes.
     if version < (1, 31) {
         anyhow::bail!(
             "Wallet RPC v{}.{} looks stock: no `extra` support. Stamping would spend a fee with no mark.\nInstall the patched monero-wallet-rpc (see README: Managed sidecar).",

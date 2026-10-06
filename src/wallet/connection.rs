@@ -113,12 +113,29 @@ pub fn endpoint_is_loopback(endpoint: &str) -> bool {
         .strip_prefix("https://")
         .or_else(|| endpoint.strip_prefix("http://"))
         .unwrap_or(endpoint);
-    // Strip userinfo, then cut at first '/', '?', '#'.
-    let rest = rest.rsplit('@').next().unwrap_or(rest);
-    let host_port = rest.split(['/', '?', '#']).next().unwrap_or(rest);
-    // Strip port (but not for bracketed IPv6 without port... handle below).
-    let host = if let Some(stripped) = host_port.strip_prefix('[') {
-        stripped.split(']').next().unwrap_or(stripped)
+    // Cut the authority at the first '/', '?', or '#' BEFORE stripping
+    // userinfo: `@` in the path/query/fragment is not a userinfo
+    // separator. The old `rsplit('@')`-over-everything order let
+    // `http://evil.com/x@127.0.0.1` and `http://evil.com/?a=@localhost`
+    // count as loopback.
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or(rest);
+    let host_port = authority.rsplit('@').next().unwrap_or(authority);
+    // Strip port. Bracketed IPv6 (`[::1]` / `[::1]:port`) needs care:
+    // only treat `[...]` as brackets when the remainder is empty or a
+    // `:port`; `[::1].evil.com` is a hostname, not loopback.
+    let host = if let Some(after_bracket) = host_port.strip_prefix('[') {
+        match after_bracket.find(']') {
+            Some(end) => {
+                let inside = &after_bracket[..end];
+                let rest = &after_bracket[end + 1..];
+                if rest.is_empty() || rest.starts_with(':') {
+                    inside
+                } else {
+                    host_port
+                }
+            }
+            None => host_port,
+        }
     } else if host_port.matches(':').count() == 1 {
         host_port.split(':').next().unwrap_or(host_port)
     } else {
@@ -257,11 +274,25 @@ mod tests {
         assert!(endpoint_is_loopback("https://localhost:18081/"));
         assert!(endpoint_is_loopback("http://[::1]:18081"));
         assert!(endpoint_is_loopback("http://127.0.0.1:18081/"));
+        // Genuine userinfo still counts as loopback.
+        assert!(endpoint_is_loopback("http://user:pass@127.0.0.1:18081"));
+        assert!(endpoint_is_loopback("http://user@localhost:18081/json_rpc"));
         // L1: suffix tricks must NOT count as loopback.
         assert!(!endpoint_is_loopback("http://127.0.0.1.evil.com:18081"));
         assert!(!endpoint_is_loopback("http://localhost.evil.com:18081"));
         assert!(!endpoint_is_loopback("http://evil.com:18081"));
         assert!(!endpoint_is_loopback("http://192.168.1.1:18081"));
+        // `@` in path/query/fragment is NOT userinfo: all remote.
+        assert!(!endpoint_is_loopback("http://evil.com/x@127.0.0.1"));
+        assert!(!endpoint_is_loopback("http://evil.com/?a=@localhost"));
+        assert!(!endpoint_is_loopback("https://evil.example/@[::1]"));
+        assert!(!endpoint_is_loopback("http://evil.com/#@127.0.0.1"));
+        assert!(!endpoint_is_loopback(
+            "http://evil.com:18081/path@127.0.0.1"
+        ));
+        // Host itself is still exact.
+        assert!(!endpoint_is_loopback("http://evil.com:18081"));
+        assert!(!endpoint_is_loopback("http://[::1].evil.com:18081"));
         // is_remote agrees.
         let cfg = WalletConfig {
             endpoint: "http://127.0.0.1.evil.com:18082".to_string(),

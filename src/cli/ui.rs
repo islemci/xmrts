@@ -24,6 +24,12 @@ fn quiet() -> bool {
     QUIET.load(Ordering::Relaxed)
 }
 
+/// True when `--json` mode suppressed human lines. `main` uses this to
+/// decide whether a failure must also print a JSON error document.
+pub fn is_quiet() -> bool {
+    quiet()
+}
+
 /// Green check line. Use for done steps.
 pub fn ok(message: &str) {
     if quiet() {
@@ -32,12 +38,12 @@ pub fn ok(message: &str) {
     println!("{} {message}", style("✓").green().bold());
 }
 
-/// Red cross line. Use for failures.
+/// Red cross line to stderr. Use for failures.
+/// Always prints, even in `--json` mode: stdout stays JSON-only while
+/// humans still see the error on stderr. (`main` adds the JSON error
+/// document on stdout when quiet.)
 pub fn fail(message: &str) {
-    if quiet() {
-        return;
-    }
-    println!("{} {message}", style("✗").red().bold());
+    eprintln!("{} {message}", style("✗").red().bold());
 }
 
 /// Yellow circle line. Use for pending or skipped steps.

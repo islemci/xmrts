@@ -20,10 +20,20 @@ async fn main() -> Result<()> {
         Command::Wallet(args) => xmrts::cli::wallet::run(args, cli.verbose).await,
         Command::Setting(args) => xmrts::cli::setting::run(args),
     };
-    // Every failure ends with the red cross (suppressed in --json mode,
-    // where commands already printed a JSON error document).
+    // Every failure ends with the red cross on stderr. In `--json` mode
+    // stdout must also carry a JSON error document (automation parses
+    // stdout; humans read stderr). Commands that already printed their
+    // own JSON error exit directly via `fail_exit_json`, so this covers
+    // the `anyhow::bail!` paths like `stamp --json` with a missing file.
     if let Err(e) = result {
-        xmrts::cli::ui::fail(&format!("{e:#}"));
+        let msg = format!("{e:#}");
+        xmrts::cli::ui::fail(&msg);
+        if xmrts::cli::ui::is_quiet() {
+            println!(
+                "{}",
+                serde_json::to_string(&serde_json::json!({"ok": false, "error": msg})).unwrap()
+            );
+        }
         std::process::exit(1);
     }
     Ok(())

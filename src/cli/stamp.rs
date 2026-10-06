@@ -572,6 +572,7 @@ pub(crate) fn write_proofs(
     // M6: one leaf per distinct hash; files with identical content share
     // the same leaf_index.
     let mut written: Vec<PathBuf> = Vec::new();
+    let mut seen_paths: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
     let mut index_of: HashMap<[u8; 32], u64> = HashMap::new();
     for (i, h) in sorted.iter().enumerate() {
         index_of.insert(*h, i as u64);
@@ -610,11 +611,51 @@ pub(crate) fn write_proofs(
         let out = proof_path_for(path, out_dir)?;
         // Two inputs with the same file name (e.g. a/x.txt + b/x.txt with
         // one --out-dir) would silently overwrite each other: fail instead.
-        if written.contains(&out) {
+        if !seen_paths.insert(out.clone()) {
             anyhow::bail!(
                 "Two inputs map to the same proof file {}. Use separate --out-dir runs.",
                 out.display()
             );
+        }
+        // Never silently replace an existing proof: the earlier anchored
+        // timestamp is the valuable one. Re-stamping the same files must
+        // not swap it for a later proof. The one exception is the
+        // pending -> anchored upgrade (`finalize`, or `stamp` after the
+        // depth gate): overwriting a pending proof with its anchored
+        // version is the intended finish step.
+        if out.exists() {
+            match std::fs::read(&out) {
+                Ok(raw) => match Proof::from_bytes(&raw) {
+                    Ok(existing) if existing.is_pending() && height != 0 => {
+                        super::ui::note(&format!(
+                            "Upgrading pending proof {} to anchored (block {height}).",
+                            out.display()
+                        ));
+                    }
+                    Ok(existing) if existing.is_pending() => {
+                        anyhow::bail!(
+                            "Proof {} already exists (pending). Remove it or use --out-dir to re-stamp.",
+                            out.display()
+                        );
+                    }
+                    Ok(existing) => {
+                        anyhow::bail!(
+                            "Proof {} already exists and is anchored (block {}). Refusing to replace the earlier timestamp. Remove it or use --out-dir if you really want a later proof.",
+                            out.display(),
+                            existing.block_height
+                        );
+                    }
+                    Err(_) => {
+                        anyhow::bail!(
+                            "File {} already exists and is not a valid proof. Refusing to overwrite.",
+                            out.display()
+                        );
+                    }
+                },
+                Err(e) => {
+                    anyhow::bail!("Proof {} exists but cannot be read: {e}", out.display());
+                }
+            }
         }
         std::fs::write(&out, proof.to_bytes())
             .with_context(|| format!("Writing {}", out.display()))?;

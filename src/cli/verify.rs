@@ -27,7 +27,6 @@ pub struct VerifyArgs {
 }
 
 pub async fn run(args: &VerifyArgs, verbose: bool, stagenet: bool) -> Result<()> {
-    let ok = true;
     if args.json {
         super::ui::set_quiet(true);
     }
@@ -90,7 +89,8 @@ pub async fn run(args: &VerifyArgs, verbose: bool, stagenet: bool) -> Result<()>
             }
             if args.json {
                 print_json(&serde_json::json!({
-                    "ok": true, "anchored": false,
+                    "ok": true, "anchored": false, "final": false,
+                    "warnings": ["pending proof: no block yet; crypto only"],
                     "file_hash": hex::encode(file_hash),
                     "root": hex::encode(proof.root),
                     "network": proof.network.as_str(),
@@ -114,7 +114,8 @@ pub async fn run(args: &VerifyArgs, verbose: bool, stagenet: bool) -> Result<()>
         }
         if args.json {
             print_json(&serde_json::json!({
-                "ok": true, "anchored": false, "chain_checked": false,
+                "ok": true, "anchored": false, "chain_checked": false, "final": false,
+                "warnings": ["chain not checked (--offline); crypto only"],
                 "file_hash": hex::encode(file_hash),
                 "root": hex::encode(proof.root),
                 "txid": hex::encode(proof.txid),
@@ -129,7 +130,32 @@ pub async fn run(args: &VerifyArgs, verbose: bool, stagenet: bool) -> Result<()>
     let checked = blockchain_check(&proof, args.daemon.as_deref(), stagenet).await;
     super::ui::abandon(&bar);
     match checked {
-        Ok((anchor, daemon_used)) => {
+        Ok((anchor, daemon_used, transport_warnings)) => {
+            // Collect machine-visible warnings. `ui::warn` prints to
+            // stderr in human mode but is suppressed in `--json` mode,
+            // so JSON must carry them or automation sees a clean success.
+            let mut warnings: Vec<String> = transport_warnings;
+            if anchor.confirmations < crate::wallet::daemon::MIN_CONFIRMATIONS {
+                let w = format!(
+                    "Only {} confirmation(s); want {}+. Reorg risk: wait before relying on this. (Sep 2025 saw an 18-block reorg; consider 20+ for high value.)",
+                    anchor.confirmations,
+                    crate::wallet::daemon::MIN_CONFIRMATIONS
+                );
+                super::ui::warn(&w);
+                warnings.push(w);
+            }
+            if proof.network != crate::protocol::proof::Network::Mainnet {
+                let w =
+                    "NON-MAINNET proof: testnet/stagenet marks have no security value.".to_string();
+                super::ui::warn(&w);
+                warnings.push(w);
+            }
+            // `final` means buried deep enough on mainnet over a trusted
+            // transport. Anything else is anchored but not final.
+            let insecure = warnings.iter().any(|w| w.contains("without TLS"));
+            let is_final = anchor.confirmations >= crate::wallet::daemon::MIN_CONFIRMATIONS
+                && proof.network == crate::protocol::proof::Network::Mainnet
+                && !insecure;
             // L2+UX1: lead with time, then list what was trusted.
             if !args.json {
                 println!();
@@ -151,22 +177,16 @@ pub async fn run(args: &VerifyArgs, verbose: bool, stagenet: bool) -> Result<()>
                 super::ui::field("Block hash", &hex::encode(proof.block_hash));
                 super::ui::field("Network", proof.network.as_str());
                 super::ui::field("Confirmations", &anchor.confirmations.to_string());
-            }
-            if anchor.confirmations < crate::wallet::daemon::MIN_CONFIRMATIONS {
-                super::ui::warn(&format!(
-                    "Only {} confirmation(s); want {}+. Reorg risk: wait before relying on this.",
-                    anchor.confirmations,
-                    crate::wallet::daemon::MIN_CONFIRMATIONS
-                ));
-            }
-            if proof.network != crate::protocol::proof::Network::Mainnet {
-                super::ui::warn(
-                    "NON-MAINNET proof: testnet/stagenet marks have no security value.",
-                );
+                if !is_final {
+                    super::ui::field("Final", "no (see warnings above)");
+                }
             }
             if args.json {
                 print_json(&serde_json::json!({
                     "ok": true, "anchored": true, "chain_checked": true,
+                    "final": is_final,
+                    "warnings": warnings,
+                    "min_confirmations": crate::wallet::daemon::MIN_CONFIRMATIONS,
                     "file_hash": hex::encode(file_hash),
                     "root": hex::encode(proof.root),
                     "txid": hex::encode(proof.txid),
@@ -180,7 +200,6 @@ pub async fn run(args: &VerifyArgs, verbose: bool, stagenet: bool) -> Result<()>
             }
         }
         Err(e) => {
-            let _ = ok;
             super::ui::fail("Check failed.");
             if !args.json {
                 println!();
@@ -209,7 +228,7 @@ async fn blockchain_check(
     proof: &Proof,
     daemon_override: Option<&str>,
     stagenet: bool,
-) -> Result<(crate::wallet::daemon::AnchorCheck, String)> {
+) -> Result<(crate::wallet::daemon::AnchorCheck, String, Vec<String>)> {
     let cfg = connection::load_config();
     let effective_net = if stagenet {
         "stagenet".to_string()
@@ -241,12 +260,16 @@ async fn blockchain_check(
     };
     // M1: one remote daemon decides the result. Warn on plain-HTTP
     // non-loopback transport (response could be tampered in flight).
+    // Returned in the warnings vec too so `--json` automation sees it.
+    let mut warnings = Vec::new();
     if daemon.to_ascii_lowercase().starts_with("http://")
         && !connection::endpoint_is_loopback(&daemon)
     {
-        super::ui::warn(&format!(
+        let w = format!(
             "Daemon {daemon} is remote without TLS. A network attacker could lie about the chain."
-        ));
+        );
+        super::ui::warn(&w);
+        warnings.push(w);
     }
     // Full anchor check: commitment + exact height + block-hash match +
     // daemon nettype match (H1+M1). No wallet involved (M2): verification
@@ -268,5 +291,5 @@ async fn blockchain_check(
         ),
         other => anyhow::anyhow!("{other}"),
     })?;
-    Ok((anchor, daemon))
+    Ok((anchor, daemon, warnings))
 }

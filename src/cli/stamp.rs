@@ -154,7 +154,8 @@ pub async fn run(args: &StampArgs, verbose: bool, stagenet: bool) -> Result<()> 
             println!(
                 "{}",
                 serde_json::to_string(&serde_json::json!({
-                    "ok": true, "pending": true, "offline": true,
+                    "ok": true, "pending": true, "offline": true, "final": false,
+                    "warnings": ["offline run: proofs are pending, not anchored"],
                     "root": hex::encode(root),
                     "network": network_name,
                     "proofs": proofs.iter().map(|p| p.display().to_string()).collect::<Vec<_>>(),
@@ -441,10 +442,12 @@ pub async fn run(args: &StampArgs, verbose: bool, stagenet: bool) -> Result<()> 
         super::ui::ok(&format!("Done. Files prove no later than block {height}."));
     }
     if args.json {
+        let pending = height == 0;
         println!(
             "{}",
             serde_json::to_string(&serde_json::json!({
-                "ok": true, "pending": height == 0,
+                "ok": true, "pending": pending, "final": !pending,
+                "warnings": if pending { vec!["still pending: not buried deep enough; run `xmrts finalize` later".to_string()] } else { Vec::<String>::new() },
                 "txid": hex::encode(txid_bytes),
                 "block_height": height,
                 "root": hex::encode(root),

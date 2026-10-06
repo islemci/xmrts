@@ -46,6 +46,8 @@ pub enum Command {
     Doctor(doctor::DoctorArgs),
     /// Finish a pending stamp into anchored proofs (no new transaction).
     Finalize(finalize::FinalizeArgs),
+    /// List pending stamps or clean up records whose files are gone.
+    Pending(pending::PendingArgs),
     /// Manage the monero-wallet-rpc sidecar (start/stop/status).
     Wallet(wallet::WalletArgs),
     /// Read and modify settings (price, currency, endpoint, ...).

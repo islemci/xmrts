@@ -5,6 +5,7 @@
 //! (preview hex always, relayed txid once known). Never file contents.
 
 use anyhow::{Context, Result};
+use clap::{Args, Subcommand};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
@@ -81,6 +82,208 @@ pub fn save(op: &PendingOp) -> Result<PathBuf> {
     // metadata and the list of stamped file paths.
     connection::atomic_write_0600(&path, serde_json::to_string_pretty(op)?.as_bytes())?;
     Ok(path)
+}
+
+/// `xmrts pending`: inspect and tidy recovery records.
+/// Bare `pending` lists; `pending clean` removes records that can never
+/// finalize (input files gone or record unreadable). Records with all
+/// files present are never touched: they may still confirm.
+#[derive(Debug, Args)]
+pub struct PendingArgs {
+    #[command(subcommand)]
+    pub command: Option<PendingCommand>,
+    /// Machine-readable JSON list on stdout (human lines suppressed).
+    /// Pass before the subcommand: `xmrts pending --json list`.
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum PendingCommand {
+    /// List pending stamps (default): age, network, files, tx state.
+    List,
+    /// Remove records whose input files are gone (asks first).
+    Clean {
+        /// Skip the confirmation prompt.
+        #[arg(long)]
+        yes: bool,
+    },
+}
+
+struct PendingView {
+    path: PathBuf,
+    age_secs: Option<u64>,
+    op: Result<PendingOp, String>,
+}
+
+fn view_all() -> Vec<PendingView> {
+    list()
+        .into_iter()
+        .map(|path| {
+            let age_secs = std::fs::metadata(&path)
+                .and_then(|m| m.modified())
+                .ok()
+                .and_then(|t| {
+                    std::time::SystemTime::now()
+                        .duration_since(t)
+                        .map(|d| d.as_secs())
+                        .ok()
+                });
+            let op = load(&path).map_err(|e| format!("{e:#}"));
+            PendingView { path, age_secs, op }
+        })
+        .collect()
+}
+
+fn format_age(secs: Option<u64>) -> String {
+    match secs {
+        None => "age unknown".to_string(),
+        Some(s) if s < 60 => format!("{s}s old"),
+        Some(s) if s < 3600 => format!("{}m old", s / 60),
+        Some(s) if s < 86400 => format!("{}h {}m old", s / 3600, s % 3600 / 60),
+        Some(s) => format!("{}d {}h old", s / 86400, s % 86400 / 3600),
+    }
+}
+
+pub fn run(args: &PendingArgs) -> Result<()> {
+    if args.json {
+        super::ui::set_quiet(true);
+    }
+    let _ = connection::ensure_dirs();
+    match args.command.as_ref().unwrap_or(&PendingCommand::List) {
+        PendingCommand::List => run_list(args.json),
+        PendingCommand::Clean { yes } => run_clean(*yes),
+    }
+}
+
+fn run_list(json: bool) -> Result<()> {
+    let views = view_all();
+    if views.is_empty() {
+        super::ui::note("Nothing pending. No files wait.");
+        if json {
+            println!(
+                "{}",
+                serde_json::to_string(&serde_json::json!({"ok": true, "pending": []})).unwrap()
+            );
+        }
+        return Ok(());
+    }
+    if json {
+        let items: Vec<serde_json::Value> = views
+            .iter()
+            .map(|v| match &v.op {
+                Ok(op) => {
+                    let missing: Vec<&String> = op
+                        .files
+                        .iter()
+                        .filter(|f| !Path::new(f).is_file())
+                        .collect();
+                    serde_json::json!({
+                        "path": v.path.display().to_string(),
+                        "age_secs": v.age_secs,
+                        "network": op.network,
+                        "files": op.files,
+                        "missing_files": missing,
+                        "txid": op.txid,
+                        "sent": !op.txid.is_empty(),
+                    })
+                }
+                Err(e) => serde_json::json!({
+                    "path": v.path.display().to_string(),
+                    "age_secs": v.age_secs,
+                    "error": e,
+                }),
+            })
+            .collect();
+        println!(
+            "{}",
+            serde_json::to_string(&serde_json::json!({"ok": true, "pending": items})).unwrap()
+        );
+        return Ok(());
+    }
+    super::ui::header("◆", "Pending");
+    for v in &views {
+        let name = v
+            .path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| v.path.display().to_string());
+        match &v.op {
+            Ok(op) => {
+                let missing = op.files.iter().filter(|f| !Path::new(f).is_file()).count();
+                let tx = if op.txid.is_empty() {
+                    "never sent"
+                } else {
+                    "sent, awaiting confirmations"
+                };
+                super::ui::field(&name, &format!("{}, {}", format_age(v.age_secs), tx));
+                println!(
+                    "  {} file(s), {} ({}), txid: {}",
+                    op.files.len(),
+                    op.network,
+                    if missing == 0 {
+                        "all files present".to_string()
+                    } else {
+                        format!("{missing} file(s) missing")
+                    },
+                    if op.txid.is_empty() {
+                        "—".to_string()
+                    } else {
+                        op.txid.clone()
+                    }
+                );
+            }
+            Err(e) => {
+                super::ui::field(
+                    &name,
+                    &format!("{}, unreadable: {e}", format_age(v.age_secs)),
+                );
+            }
+        }
+    }
+    super::ui::hint("Finish one with `xmrts finalize`; drop dead ones with `xmrts pending clean`.");
+    Ok(())
+}
+
+fn run_clean(yes: bool) -> Result<()> {
+    let views = view_all();
+    // Cleanable = unreadable, or at least one input file gone (finalize
+    // needs every file to recompute the root, so these can never finish).
+    let dead: Vec<&PendingView> = views
+        .iter()
+        .filter(|v| match &v.op {
+            Err(_) => true,
+            Ok(op) => op.files.iter().any(|f| !Path::new(f).is_file()),
+        })
+        .collect();
+    if dead.is_empty() {
+        if views.is_empty() {
+            super::ui::note("Nothing pending. No files wait.");
+        } else {
+            super::ui::ok(&format!(
+                "All {} pending(s) have their files. Nothing to clean.",
+                views.len()
+            ));
+        }
+        return Ok(());
+    }
+    super::ui::header("◆", "Pending clean");
+    for v in &dead {
+        println!("  {}", v.path.display());
+    }
+    if !yes && !super::ui::confirm(&format!("Remove {} dead record(s)? [y/N] ", dead.len()))? {
+        super::ui::note("Stopped. Nothing removed.");
+        return Ok(());
+    }
+    let mut removed = 0;
+    for v in &dead {
+        match std::fs::remove_file(&v.path) {
+            Ok(()) => removed += 1,
+            Err(e) => super::ui::warn(&format!("Could not remove {}: {e}", v.path.display())),
+        }
+    }
+    super::ui::ok(&format!("Removed {removed} dead record(s)."));
+    Ok(())
 }
 
 /// Record the relayed txid in the pending file, so a crash between relay

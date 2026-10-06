@@ -143,9 +143,11 @@ async fn finalize_one(
     }
     pairs.sort_by_key(|(h, _)| *h);
     // M6: compare deduped sets (identical content shares one leaf).
+    // HashSet for O(n) instead of quadratic Vec::contains.
+    let mut seen: std::collections::HashSet<[u8; 32]> = std::collections::HashSet::new();
     let mut recomputed_unique: Vec<[u8; 32]> = Vec::new();
     for (h, _) in &pairs {
-        if !recomputed_unique.contains(h) {
+        if seen.insert(*h) {
             recomputed_unique.push(*h);
         }
     }

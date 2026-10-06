@@ -75,13 +75,13 @@ pub async fn run(args: &StampArgs, verbose: bool, stagenet: bool) -> Result<()> 
             inputs.len()
         ));
     }
-    let mut seen: HashMap<String, usize> = HashMap::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     for f in &inputs {
         if !f.is_file() {
             anyhow::bail!("Cannot read file: {}", f.display());
         }
         let canon = canonical_key(f)?;
-        if seen.insert(canon.clone(), 1).is_some() {
+        if !seen.insert(canon) {
             anyhow::bail!("Same file twice: {}. List each file once.", f.display());
         }
     }
@@ -98,10 +98,11 @@ pub async fn run(args: &StampArgs, verbose: bool, stagenet: bool) -> Result<()> 
 
     hashes.sort_by_key(|(h, _)| *h);
     // M6: dedupe identical content to one leaf. Files with the same bytes
-    // share a leaf; each still gets its own proof file.
+    // share a leaf; each still gets its own proof file. HashSet for O(n).
+    let mut seen_hashes: std::collections::HashSet<[u8; 32]> = std::collections::HashSet::new();
     let mut unique_hashes: Vec<[u8; 32]> = Vec::new();
     for (h, _) in &hashes {
-        if !unique_hashes.contains(h) {
+        if seen_hashes.insert(*h) {
             unique_hashes.push(*h);
         }
     }
@@ -469,33 +470,100 @@ fn canonical_key(p: &Path) -> Result<String> {
 
 /// Expand stamp inputs: plain files pass through, directories expand to
 /// their files (top level, or depth-first with `--recursive`). Output is
-/// sorted for determinism. Broken symlinks and missing paths are errors.
+/// sorted for determinism. Broken symlinks and missing paths are errors
+/// for explicit args. Directory walks skip `*.xmrts` proof files (so a
+/// folder that already holds proofs does not hash them into `.xmrts.xmrts`)
+/// and never follow symlinks (prevents cycles like `a -> ..` from
+/// collapsing into a misleading "Same file twice").
 fn expand_inputs(paths: &[PathBuf], recursive: bool) -> Result<Vec<PathBuf>> {
     let mut out: Vec<PathBuf> = Vec::new();
+    let mut visited_dirs: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut skipped_proofs = 0usize;
+    let mut skipped_symlinks = 0usize;
     for p in paths {
+        // Explicit symlink to a file: hash the target (intentional use).
+        // Explicit symlink to a dir: walk it once, but never follow
+        // nested symlinks inside (see collect_dir).
         if p.is_file() {
+            if is_xmrts_proof(p) {
+                anyhow::bail!(
+                    "Refusing to stamp proof file itself: {}. Stamp the original file instead.",
+                    p.display()
+                );
+            }
             out.push(p.clone());
         } else if p.is_dir() {
-            collect_dir(p, recursive, &mut out)?;
+            collect_dir(
+                p,
+                recursive,
+                &mut out,
+                &mut visited_dirs,
+                &mut skipped_proofs,
+                &mut skipped_symlinks,
+            )?;
         } else {
             anyhow::bail!("Cannot read file: {}", p.display());
         }
     }
     out.sort();
+    if skipped_proofs > 0 {
+        super::ui::note(&format!(
+            "Skipped {skipped_proofs} proof file(s) (*.xmrts)."
+        ));
+    }
+    if skipped_symlinks > 0 {
+        super::ui::note(&format!(
+            "Skipped {skipped_symlinks} symlink(s) (not followed)."
+        ));
+    }
     Ok(out)
 }
 
-fn collect_dir(dir: &Path, recursive: bool, out: &mut Vec<PathBuf>) -> Result<()> {
+fn is_xmrts_proof(p: &Path) -> bool {
+    p.extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("xmrts"))
+}
+
+fn collect_dir(
+    dir: &Path,
+    recursive: bool,
+    out: &mut Vec<PathBuf>,
+    visited: &mut std::collections::HashSet<String>,
+    skipped_proofs: &mut usize,
+    skipped_symlinks: &mut usize,
+) -> Result<()> {
+    // Cycle guard: same canonical dir twice (e.g. via an explicit
+    // symlinked dir arg + its target) means stop, not loop forever.
+    let canon = canonical_key(dir)?;
+    if !visited.insert(canon) {
+        return Ok(());
+    }
     let mut entries: Vec<PathBuf> = std::fs::read_dir(dir)
         .with_context(|| format!("Reading dir {}", dir.display()))?
         .filter_map(|e| e.ok().map(|e| e.path()))
         .collect();
     entries.sort();
     for e in entries {
+        // Never follow symlinks: lstat first. This skips symlinked files
+        // and dirs alike, including broken links and cycles.
+        match std::fs::symlink_metadata(&e) {
+            Ok(md) if md.file_type().is_symlink() => {
+                *skipped_symlinks += 1;
+                continue;
+            }
+            Err(_) => {
+                anyhow::bail!("Cannot read file: {}", e.display());
+            }
+            _ => {}
+        }
         if e.is_file() {
+            if is_xmrts_proof(&e) {
+                *skipped_proofs += 1;
+                continue;
+            }
             out.push(e);
         } else if e.is_dir() && recursive {
-            collect_dir(&e, true, out)?;
+            collect_dir(&e, true, out, visited, skipped_proofs, skipped_symlinks)?;
         }
     }
     Ok(())

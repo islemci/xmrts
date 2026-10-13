@@ -14,7 +14,10 @@ pub struct ConnectArgs {
     /// RPC user name (for wallets started with a login)
     #[arg(long)]
     pub username: Option<String>,
-    /// RPC password. Needs --save-auth too. Never saved without consent.
+    /// RPC password. Prefer omitting this and typing the password when
+    /// asked: passing `--password` on the command line exposes it in shell
+    /// history and the process list. Needs --save-auth too. Never saved
+    /// without consent.
     #[arg(long)]
     pub password: Option<String>,
     /// Save user name and password locally (plain text, locked to you).
@@ -51,6 +54,9 @@ pub async fn run(args: &ConnectArgs, verbose: bool, stagenet: bool) -> Result<()
             if cfg.username.is_none() {
                 anyhow::bail!("Need a user name too. Pass --username or keep one saved.");
             }
+            super::ui::warn(
+                "Password passed on the command line stays in shell history and is visible in `ps`. Prefer `xmrts connect --username YOU --save-auth` and type it when asked.",
+            );
             cfg.password = Some(p.clone());
             super::ui::note("Password is saved as plain text. Only your user can read it.");
         }
@@ -58,7 +64,18 @@ pub async fn run(args: &ConnectArgs, verbose: bool, stagenet: bool) -> Result<()
             anyhow::bail!("Add --save-auth to save the password. Or skip --password.");
         }
         (None, true) => {
-            super::ui::note("--save-auth alone changes nothing.");
+            if cfg.username.is_none() {
+                anyhow::bail!("Need a user name too. Pass --username or keep one saved.");
+            }
+            let password = zeroize::Zeroizing::new(
+                rpassword::prompt_password("RPC password: ")
+                    .map_err(|e| anyhow::anyhow!("Password prompt failed: {e}"))?,
+            );
+            if password.is_empty() {
+                anyhow::bail!("No password typed. Nothing saved.");
+            }
+            cfg.password = Some(password.to_string());
+            super::ui::note("Password is saved as plain text. Only your user can read it.");
         }
         (None, false) => {}
     }
@@ -78,7 +95,7 @@ pub async fn run(args: &ConnectArgs, verbose: bool, stagenet: bool) -> Result<()
 
     if cfg.username.is_some() && cfg.password.is_none() {
         super::ui::note("User name is set but no password is saved. Calls go out bare.");
-        super::ui::hint("Set one with: xmrts connect --username YOU --password PASS --save-auth");
+        super::ui::hint("Set one with: xmrts connect --username YOU --save-auth");
     }
 
     if cfg.is_remote() && !cfg.is_tls() {

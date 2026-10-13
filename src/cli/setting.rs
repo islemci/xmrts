@@ -105,7 +105,7 @@ fn apply_set(cfg: &mut WalletConfig, key: &str, value: &str) -> Result<()> {
         "wallet-rpc-path" => cfg.wallet_rpc_path = Some(value.to_string()),
         "username" => cfg.username = Some(value.to_string()),
         "password" => anyhow::bail!(
-            "Use connect for passwords.\nRun `xmrts connect --username YOU --password PASS --save-auth`"
+            "Use connect for passwords.\nRun `xmrts connect --username YOU --save-auth` and type it when asked"
         ),
         _ => anyhow::bail!("Unknown setting '{key}'. Try `xmrts setting list`"),
     }

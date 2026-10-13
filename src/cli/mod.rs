@@ -7,11 +7,14 @@ pub mod finalize;
 pub mod generate;
 pub mod init;
 pub mod pending;
+pub mod queue;
 pub mod setting;
 pub mod stamp;
+pub mod stats;
 pub mod ui;
 pub mod verify;
 pub mod wallet;
+pub mod watch;
 
 use clap::{Parser, Subcommand};
 
@@ -47,6 +50,10 @@ pub enum Command {
     Doctor(doctor::DoctorArgs),
     /// Finish a pending stamp into anchored proofs (no new transaction).
     Finalize(finalize::FinalizeArgs),
+    /// Collect files over time, stamp them all in one transaction.
+    Queue(queue::QueueArgs),
+    /// Finish pending stamps in the background until nothing waits.
+    Watch(watch::WatchArgs),
     /// List pending stamps or clean up records whose files are gone.
     Pending(pending::PendingArgs),
     /// Print shell completions or a man page to stdout.
@@ -55,4 +62,6 @@ pub enum Command {
     Wallet(wallet::WalletArgs),
     /// Read and modify settings (price, currency, endpoint, ...).
     Setting(setting::SettingArgs),
+    /// What timestamping cost and what waits.
+    Stats(stats::StatsArgs),
 }

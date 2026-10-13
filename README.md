@@ -66,6 +66,21 @@ brew install xmrts
 cargo fmt && cargo clippy -- -D warnings && cargo test
 ```
 
+## GitHub Action
+
+Timestamp release artifacts from CI with [`action.yml`](action.yml)
+(see [`examples/ci-stamp.yml`](examples/ci-stamp.yml)):
+
+```yaml
+- uses: islemci/xmrts@v1
+  with:
+    files: "dist/SHA256SUMS"
+    daemon: ${{ secrets.XMRTS_DAEMON }}
+    max-fee: "100000"
+```
+
+Use a dedicated low-value timestamping wallet, never savings.
+
 ## Trust model
 
 A proof shows a file hash existed **no later than** the Monero block in

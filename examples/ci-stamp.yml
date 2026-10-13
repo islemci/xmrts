@@ -1,0 +1,69 @@
+# Timestamp release artifacts with xmrts on every tag.
+#
+# Prereqs:
+# - a dedicated low-value Monero timestamping wallet (NEVER savings),
+#   open in a monero-wallet-rpc reachable from the runner;
+# - RPC login stored as Actions secrets when the wallet uses --rpc-login;
+# - a daemon address (local node or trusted remote).
+#
+# Flow: stamp with --no-wait on release, then a scheduled job runs
+# `finalize --all` until the proofs anchor.
+
+name: timestamp-release
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  stamp:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build artifacts
+        run: |
+          # ... your build here, e.g. cargo build --release
+          mkdir -p dist && shasum -a 256 dist/* > dist/SHA256SUMS
+
+      - name: Timestamp artifacts
+        id: stamp
+        uses: islemci/xmrts@v1
+        with:
+          files: "dist/SHA256SUMS"
+          version: "0.1.3"
+          daemon: ${{ secrets.XMRTS_DAEMON }}
+          wallet-endpoint: "http://127.0.0.1:18082"
+          max-fee: "100000"
+          no-wait: "true"
+          out-dir: "dist"
+
+      - name: Upload proofs
+        uses: actions/upload-artifact@v4
+        with:
+          name: timestamp-proofs
+          path: dist/*.xmrts
+
+  finalize:
+    runs-on: ubuntu-22.04
+    # Every 30 min until anchored; `finalize --all` exits 0 once empty.
+    if: always()
+    needs: stamp
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install xmrts
+        run: |
+          curl -fsSL https://github.com/islemci/xmrts/releases/download/v0.1.3/xmrts-linux-x86_64.tar.gz \
+            -o /tmp/xmrts.tar.gz
+          mkdir -p ~/.local/bin && tar -xzf /tmp/xmrts.tar.gz -C ~/.local/bin
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - uses: actions/download-artifact@v4
+        with:
+          name: timestamp-proofs
+          path: dist
+      - name: Finish pending stamps
+        run: xmrts finalize --all --daemon "${{ secrets.XMRTS_DAEMON }}"
+        timeout-minutes: 25

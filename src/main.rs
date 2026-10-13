@@ -17,10 +17,13 @@ async fn main() -> Result<()> {
         Command::Verify(args) => xmrts::cli::verify::run(args, cli.verbose, cli.stagenet).await,
         Command::Doctor(args) => xmrts::cli::doctor::run(args, cli.verbose, cli.stagenet).await,
         Command::Finalize(args) => xmrts::cli::finalize::run(args, cli.verbose, cli.stagenet).await,
+        Command::Queue(args) => xmrts::cli::queue::run(args, cli.verbose, cli.stagenet).await,
+        Command::Watch(args) => xmrts::cli::watch::run(args, cli.verbose, cli.stagenet).await,
         Command::Pending(args) => xmrts::cli::pending::run(args),
         Command::Generate(args) => xmrts::cli::generate::run(args),
         Command::Wallet(args) => xmrts::cli::wallet::run(args, cli.verbose).await,
         Command::Setting(args) => xmrts::cli::setting::run(args),
+        Command::Stats(args) => xmrts::cli::stats::run(args),
     };
     // Every failure ends with the red cross on stderr. In `--json` mode
     // stdout must also carry a JSON error document (automation parses

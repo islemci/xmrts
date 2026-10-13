@@ -1,0 +1,106 @@
+name: "Timestamp with xmrts"
+description: "Anchor file hashes on Monero for decentralized timestamping"
+author: "xmrts"
+branding:
+  icon: "clock"
+  color: "purple"
+
+inputs:
+  files:
+    description: "Space-separated list of files (or globs) to timestamp"
+    required: true
+  version:
+    description: "xmrts release to install (e.g. 0.1.3). Defaults to latest."
+    required: false
+    default: ""
+  network:
+    description: "Monero network for proofs: mainnet or stagenet"
+    required: false
+    default: "mainnet"
+  daemon:
+    description: "Daemon address for chain checks, e.g. http://127.0.0.1:18081"
+    required: false
+    default: ""
+  wallet-endpoint:
+    description: "monero-wallet-rpc endpoint, e.g. http://127.0.0.1:18082"
+    required: false
+    default: "http://127.0.0.1:18082"
+  max-fee:
+    description: "Refuse to send when the quoted fee exceeds this many atomic units"
+    required: false
+    default: ""
+  no-wait:
+    description: "Write pending proofs now; finish later with finalize (true/false)"
+    required: false
+    default: "true"
+  out-dir:
+    description: "Folder for .xmrts proofs (default: next to each file)"
+    required: false
+    default: ""
+
+outputs:
+  txid:
+    description: "Timestamp transaction hash (empty for offline runs)"
+    value: ${{ steps.stamp.outputs.txid }}
+  proofs:
+    description: "Space-separated list of written .xmrts proof files"
+    value: ${{ steps.stamp.outputs.proofs }}
+  pending:
+    description: "true when proofs are pending (not yet anchored)"
+    value: ${{ steps.stamp.outputs.pending }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Install xmrts
+      shell: bash
+      env:
+        XMTS_VERSION: ${{ inputs.version }}
+      run: |
+        set -euo pipefail
+        if [ -z "$XMTS_VERSION" ]; then
+          url="$(curl -fsSL https://api.github.com/repos/${{ github.action_repository }}/releases/latest \
+            | python3 -c 'import json,sys; print([a["browser_download_url"] for a in json.load(sys.stdin)["assets"] if "linux-x86_64" in a["name"]][0])')"
+        else
+          base="https://github.com/${{ github.action_repository }}/releases/download/v$XMTS_VERSION"
+          url="$base/xmrts-linux-x86_64.tar.gz"
+        fi
+        curl -fsSL "$url" -o /tmp/xmrts.tar.gz
+        mkdir -p "$RUNNER_TOOL_CACHE/xmrts" && tar -xzf /tmp/xmrts.tar.gz -C "$RUNNER_TOOL_CACHE/xmrts"
+        echo "$RUNNER_TOOL_CACHE/xmrts" >> "$GITHUB_PATH"
+
+    - name: Stamp files
+      id: stamp
+      shell: bash
+      env:
+        XMTS_FILES: ${{ inputs.files }}
+        XMTS_NETWORK: ${{ inputs.network }}
+        XMTS_DAEMON: ${{ inputs.daemon }}
+        XMTS_ENDPOINT: ${{ inputs.wallet-endpoint }}
+        XMTS_MAX_FEE: ${{ inputs.max-fee }}
+        XMTS_NO_WAIT: ${{ inputs.no-wait }}
+        XMTS_OUT_DIR: ${{ inputs.out-dir }}
+      run: |
+        set -euo pipefail
+        # Never stamp with a savings wallet: use a dedicated low-value
+        # timestamping wallet and a --max-fee cap (see inputs).
+        args=(--json --yes)
+        if [ "$XMTS_NO_WAIT" = "true" ]; then args+=(--no-wait); fi
+        if [ -n "$XMTS_DAEMON" ]; then args+=(--daemon "$XMTS_DAEMON"); fi
+        if [ -n "$XMTS_MAX_FEE" ]; then args+=(--max-fee "$XMTS_MAX_FEE"); fi
+        if [ -n "$XMTS_OUT_DIR" ]; then args+=(--out-dir "$XMTS_OUT_DIR"); fi
+        if [ "$XMTS_NETWORK" = "stagenet" ]; then args+=(--stagenet); fi
+        # shellcheck disable=SC2086
+        out="$(xmrts stamp $XMTS_FILES "${args[@]}")"
+        echo "$out" | python3 -c '
+          import json,sys
+          v = json.load(sys.stdin)
+          def gh_out(k, val):
+              val = "" if val is None else str(val)
+              print(f"{k}={val}")
+              with open(__import__("os").environ["GITHUB_OUTPUT"], "a") as f:
+                  f.write(f"{k}={val}\n")
+          gh_out("txid", v.get("txid", ""))
+          gh_out("proofs", " ".join(v.get("proofs", [])))
+          gh_out("pending", str(v.get("pending", False)).lower())
+        '

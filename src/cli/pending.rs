@@ -30,6 +30,9 @@ pub struct PendingOp {
     /// Preview hex (doubles as the relay payload): enough to re-relay
     /// after a crash between preview and relay.
     pub tx_hex: String,
+    /// Quoted fee in atomic units (for `stats`). Old pendings default to 0.
+    #[serde(default)]
+    pub fee: u64,
     #[serde(default)]
     pub out_dir: Option<String>,
     pub network: String,

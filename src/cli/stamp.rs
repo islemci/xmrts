@@ -352,6 +352,7 @@ pub async fn run(args: &StampArgs, verbose: bool, stagenet: bool) -> Result<()> 
         extra_hex: extra_hex.clone(),
         txid: preview.tx_hash.clone(),
         tx_hex: tx_hex.clone(),
+        fee: preview.fee,
         out_dir: args
             .out_dir
             .as_ref()
@@ -530,6 +531,14 @@ pub async fn run(args: &StampArgs, verbose: bool, stagenet: bool) -> Result<()> 
     )?;
     if height > 0 {
         let _ = std::fs::remove_file(&pending_path);
+        super::stats::record(&super::stats::HistoryEntry {
+            txid: hex::encode(txid_bytes),
+            fee: preview.fee,
+            files: hashes.len(),
+            height,
+            network: network_name.clone(),
+            time_unix: super::stats::now_unix(),
+        });
         super::ui::ok(&format!("Done. Files prove no later than block {height}."));
     }
     if args.json {

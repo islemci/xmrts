@@ -77,7 +77,7 @@ pub async fn run(args: &FinalizeArgs, verbose: bool, stagenet: bool) -> Result<(
     finalize_one(&pending_path, args.daemon.as_deref(), stagenet, min_conf).await
 }
 
-async fn finalize_one(
+pub(crate) async fn finalize_one(
     pending_path: &std::path::Path,
     daemon_opt: Option<&str>,
     stagenet: bool,
@@ -192,6 +192,14 @@ async fn finalize_one(
         out_dir.as_deref(),
     )?;
     let _ = std::fs::remove_file(pending_path);
+    super::stats::record(&super::stats::HistoryEntry {
+        txid: op.txid.clone(),
+        fee: op.fee,
+        files: pairs.len(),
+        height,
+        network: op.network.clone(),
+        time_unix: super::stats::now_unix(),
+    });
     println!();
     super::ui::ok(&format!(
         "Done. {} proof(s) at block {height}.",

@@ -10,7 +10,7 @@
 //!
 //! Wallet login password stays out of here.
 //! Setting it here would leak it to shell history. Use
-//! `xmrts connect --username YOU --password PASS --save-auth`.
+//! `xmrts connect --username YOU --save-auth` and type it when asked.
 //! Passwords show as hidden. Never printed.
 
 use anyhow::Result;

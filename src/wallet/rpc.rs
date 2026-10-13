@@ -82,7 +82,7 @@ impl WalletRpc {
             let (Some(u), Some(p)) = (self.username.as_deref(), self.password.as_deref()) else {
                 return Err(RpcError::Connection {
                     endpoint: self.endpoint.clone(),
-                    message: "wallet RPC requires login (HTTP 401) but no username/password is configured; run `xmrts connect --username USER --password PASS --save-auth`".to_string(),
+                    message: "wallet RPC requires login (HTTP 401) but no username/password is configured; run `xmrts connect --username USER --save-auth`".to_string(),
                 });
             };
             let challenges: Vec<String> = resp

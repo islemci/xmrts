@@ -332,12 +332,7 @@ async fn blockchain_check(
         // Warn on plain-HTTP non-loopback transport (response could be
         // tampered in flight). Returned in the warnings vec too so
         // `--json` automation sees it.
-        if daemon.to_ascii_lowercase().starts_with("http://")
-            && !connection::endpoint_is_loopback(daemon)
-        {
-            let w = format!(
-                "Daemon {daemon} is remote without TLS. A network attacker could lie about the chain."
-            );
+        if let Some(w) = connection::insecure_daemon_warning(daemon) {
             super::ui::warn(&w);
             warnings.push(w);
         }

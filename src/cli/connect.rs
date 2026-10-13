@@ -85,6 +85,12 @@ pub async fn run(args: &ConnectArgs, verbose: bool, stagenet: bool) -> Result<()
         super::ui::warn("Remote wallet without TLS. Login and tx data travel openly.");
     }
 
+    if let Some(d) = &cfg.daemon_endpoint {
+        if let Some(w) = connection::insecure_daemon_warning(d) {
+            super::ui::warn(&w);
+        }
+    }
+
     // Save first so settings stick even when the wallet is down.
     // The user can fix the wallet side and retry.
     let saved = connection::save_config(&cfg)?;

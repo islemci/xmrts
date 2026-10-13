@@ -145,6 +145,19 @@ pub fn endpoint_is_loopback(endpoint: &str) -> bool {
     h == "127.0.0.1" || h == "localhost" || h == "::1"
 }
 
+/// Warning text when a daemon endpoint is remote without TLS, or `None`
+/// when the transport is loopback or TLS. Callers print it via `ui::warn`
+/// and (for `--json` modes) include it in their warnings array so
+/// automation sees it too.
+pub fn insecure_daemon_warning(daemon: &str) -> Option<String> {
+    if daemon.to_ascii_lowercase().starts_with("http://") && !endpoint_is_loopback(daemon) {
+        Some(format!(
+            "Daemon {daemon} is remote without TLS. A network attacker could lie about the chain."
+        ))
+    } else {
+        None
+    }
+}
 /// Platform config directory: `~/.config/xmrts` (Linux),
 /// `~/Library/Application Support/xmrts` (macOS), `%APPDATA%\xmrts`
 /// (Windows) - via the `directories` crate.

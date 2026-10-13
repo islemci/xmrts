@@ -102,6 +102,9 @@ async fn finalize_one(
         .map(String::from)
         .or(cfg.daemon_endpoint.clone())
         .ok_or_else(|| anyhow::anyhow!("No daemon set. Run `xmrts connect --daemon <url>`"))?;
+    if let Some(w) = connection::insecure_daemon_warning(&daemon) {
+        super::ui::warn(&w);
+    }
     // M6: commitment is version-aware (V1 raw root, V2 size-bound).
     // Old pendings default to V1 via serde.
     let merkle_ver = op.merkle_ver;

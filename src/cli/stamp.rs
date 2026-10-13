@@ -385,6 +385,9 @@ pub async fn run(args: &StampArgs, verbose: bool, stagenet: bool) -> Result<()> 
         };
         {
             let d = daemon;
+            if let Some(w) = connection::insecure_daemon_warning(&d) {
+                super::ui::warn(&w);
+            }
             let bar = super::ui::spinner("Checking chain...");
             let chain_height = crate::wallet::daemon::confirm_commitment_for_version(
                 &d,

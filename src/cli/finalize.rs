@@ -87,6 +87,11 @@ async fn finalize_one(
     if op.txid.is_empty() {
         anyhow::bail!("This pending never sent (no txid). Run `xmrts stamp` again");
     }
+    if !op.relayed {
+        anyhow::bail!(
+            "This pending was built with --do-not-relay and never broadcast. Re-run `xmrts stamp` without --do-not-relay"
+        );
+    }
     let root: [u8; 32] = hex::decode(&op.root)
         .context("Pending file holds a bad root")?
         .try_into()

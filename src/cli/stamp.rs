@@ -296,6 +296,7 @@ pub async fn run(args: &StampArgs, verbose: bool, stagenet: bool) -> Result<()> 
             .map(|d| d.to_string_lossy().into_owned()),
         network: network_name.clone(),
         merkle_ver: crate::protocol::merkle::MERKLE_V2,
+        relayed: !args.do_not_relay,
     })?;
 
     // Machine mode cannot answer prompts on stdout: require --yes.
@@ -320,9 +321,12 @@ pub async fn run(args: &StampArgs, verbose: bool, stagenet: bool) -> Result<()> 
         super::ui::note("Kept local (--do-not-relay). Nothing sent.");
         preview.tx_hash
     } else {
-        let h = transaction::relay(&client, &tx_hex)
-            .await
-            .map_err(|e| anyhow::anyhow!("Send failed: {e}"))?;
+        let h = transaction::relay(&client, &tx_hex).await.map_err(|e| {
+            // Nothing was broadcast, so the preview txid in the pending
+            // record would poison `finalize` forever. Drop the record.
+            let _ = std::fs::remove_file(&pending_path);
+            anyhow::anyhow!("Send failed: {e}")
+        })?;
         if let Err(e) = pending::update_txid(&pending_path, &h) {
             super::ui::warn(&format!("Relayed but pending record update failed: {e}"));
         }

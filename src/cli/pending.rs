@@ -15,6 +15,10 @@ fn default_merkle_ver() -> u8 {
     crate::protocol::merkle::MERKLE_V1
 }
 
+fn default_relayed() -> bool {
+    true
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PendingOp {
     pub files: Vec<String>,
@@ -33,6 +37,12 @@ pub struct PendingOp {
     /// predate the field and default to V1.
     #[serde(default = "default_merkle_ver")]
     pub merkle_ver: u8,
+    /// Whether the transaction was actually relayed. `--do-not-relay`
+    /// previews leave this false: the stored txid was never broadcast, so
+    /// `finalize` must refuse to poll it forever. Old pendings predate the
+    /// field and default to true.
+    #[serde(default = "default_relayed")]
+    pub relayed: bool,
 }
 
 pub fn path_for_root(root_hex: &str) -> Option<PathBuf> {
@@ -211,7 +221,9 @@ fn run_list(json: bool) -> Result<()> {
         match &v.op {
             Ok(op) => {
                 let missing = op.files.iter().filter(|f| !Path::new(f).is_file()).count();
-                let tx = if op.txid.is_empty() {
+                let tx = if !op.relayed {
+                    "built locally, never sent (--do-not-relay)"
+                } else if op.txid.is_empty() {
                     "never sent"
                 } else {
                     "sent, awaiting confirmations"

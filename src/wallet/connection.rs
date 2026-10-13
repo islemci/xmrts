@@ -387,8 +387,10 @@ mod tests {
         assert!(!is_valid_proxy("proxy:8080"));
         assert!(!is_valid_proxy("ftp://proxy:21"));
         assert!(!is_valid_proxy(""));
-        let mut cfg = WalletConfig::default();
-        cfg.proxy = Some("bogus".to_string());
+        let mut cfg = WalletConfig {
+            proxy: Some("bogus".to_string()),
+            ..WalletConfig::default()
+        };
         assert!(cfg.validate().is_err());
         cfg.proxy = Some("socks5h://127.0.0.1:9050".to_string());
         assert!(cfg.validate().is_ok());

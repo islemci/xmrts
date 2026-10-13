@@ -149,13 +149,14 @@ pub fn find_commitments(tx_extra: &[u8]) -> Result<Vec<Commitment>, CommitmentEr
     // 0x03 merge-mining, …) is varint size + bytes.
     // On trailing malformation return what was found so far instead of
     // discarding it: a commitment already parsed is still valid evidence.
-    let partial_ok = |out: &Vec<Commitment>, msg: &str| -> Result<Vec<Commitment>, CommitmentError> {
-        if out.is_empty() {
-            Err(CommitmentError::Malformed(msg.into()))
-        } else {
-            Ok(out.clone())
-        }
-    };
+    let partial_ok =
+        |out: &Vec<Commitment>, msg: &str| -> Result<Vec<Commitment>, CommitmentError> {
+            if out.is_empty() {
+                Err(CommitmentError::Malformed(msg.into()))
+            } else {
+                Ok(out.clone())
+            }
+        };
     while pos < tx_extra.len() {
         let tag = tx_extra[pos];
         pos += 1;

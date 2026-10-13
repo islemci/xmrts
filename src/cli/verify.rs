@@ -29,6 +29,11 @@ pub struct VerifyArgs {
     /// Machine-readable JSON on stdout (human lines suppressed).
     #[arg(long)]
     pub json: bool,
+    /// Detached GPG signature to check as well (from `stamp --sign-with`).
+    /// The signature itself is verified by GPG; the timestamp proves the
+    /// signed file existed no later than the anchor block.
+    #[arg(long)]
+    pub sig: Option<PathBuf>,
 }
 
 pub async fn run(args: &VerifyArgs, verbose: bool, stagenet: bool) -> Result<()> {
@@ -83,6 +88,35 @@ pub async fn run(args: &VerifyArgs, verbose: bool, stagenet: bool) -> Result<()>
                 println!("Why:\nTree path misses the root: {e}");
             }
             fail_exit_json(args.json, &format!("tree path misses the root: {e}"));
+        }
+    }
+
+    if let Some(sig) = &args.sig {
+        let status = std::process::Command::new("gpg")
+            .args([
+                "--verify",
+                &sig.to_string_lossy(),
+                &args.file.to_string_lossy(),
+            ])
+            .status();
+        match status {
+            Ok(s) if s.success() => super::ui::ok("GPG signature is valid."),
+            Ok(_) => {
+                super::ui::fail("Check failed.");
+                if !args.json {
+                    println!();
+                    println!("Why:\nGPG signature does not verify for this file.");
+                }
+                fail_exit_json(args.json, "GPG signature does not verify for this file");
+            }
+            Err(e) => {
+                super::ui::fail("Check failed.");
+                if !args.json {
+                    println!();
+                    println!("Why:\nCould not run gpg ({e}). Is GnuPG installed?");
+                }
+                fail_exit_json(args.json, &format!("could not run gpg: {e}"));
+            }
         }
     }
 

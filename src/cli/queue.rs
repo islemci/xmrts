@@ -330,6 +330,7 @@ async fn run_flush(
         max_fee,
         priority,
         json,
+        sign_with: None,
     };
     super::stamp::run(&stamp_args, verbose, stagenet).await?;
     // The stamp pipeline owns recovery from here (pending records,

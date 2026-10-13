@@ -85,7 +85,10 @@ Use a dedicated low-value timestamping wallet, never savings.
 
 A proof shows a file hash existed **no later than** the Monero block in
 its proof (block height + hash + timestamp). It does **not** prove
-authorship, creation time, or anything before that block.
+authorship, creation time, or anything before that block. For authorship,
+sign first: `xmrts stamp --sign-with <gpg-key> file` anchors a detached
+GPG signature in the same batch, and `xmrts verify file file.xmrts --sig
+file.sig` checks both.
 
 ## Verifying releases
 

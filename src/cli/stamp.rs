@@ -65,6 +65,11 @@ pub struct StampArgs {
     /// Machine-readable JSON summary on stdout (human lines suppressed).
     #[arg(long)]
     pub json: bool,
+    /// GPG-sign each file first (detached .sig next to it) and stamp the
+    /// signatures in the same batch, binding authorship to the timestamp.
+    /// Takes a GPG key id. Proofs stay plain file hashes (no protocol change).
+    #[arg(long)]
+    pub sign_with: Option<String>,
 }
 
 /// Effective depth gate: `--min-confirmations` or MIN_CONFIRMATIONS.
@@ -97,6 +102,39 @@ pub async fn run(args: &StampArgs, verbose: bool, stagenet: bool) -> Result<()> 
             "{} path(s) expanded to {} file(s).",
             args.files.len(),
             inputs.len()
+        ));
+    }
+    // Sign-then-stamp: detached GPG signatures are written next to each
+    // file and join the same batch, so one transaction anchors both the
+    // file hashes and their authorship evidence. No protocol change:
+    // signatures are ordinary second inputs with their own proofs.
+    let mut inputs = inputs;
+    if let Some(key) = &args.sign_with {
+        let mut sigs = 0usize;
+        for f in inputs.clone() {
+            let sig = PathBuf::from(format!("{}.sig", f.display()));
+            super::ui::note(&format!("Signing {} ...", f.display()));
+            let status = std::process::Command::new("gpg")
+                .args([
+                    "--yes",
+                    "--detach-sign",
+                    "--local-user",
+                    key,
+                    "--output",
+                    &sig.to_string_lossy(),
+                    &f.to_string_lossy(),
+                ])
+                .status()
+                .map_err(|e| anyhow::anyhow!("Could not run gpg ({e}). Is GnuPG installed?"))?;
+            if !status.success() {
+                anyhow::bail!("gpg signing failed for {}. Nothing stamped.", f.display());
+            }
+            inputs.push(sig);
+            sigs += 1;
+        }
+        inputs.sort();
+        super::ui::ok(&format!(
+            "Signed {sigs} file(s); signatures join this batch."
         ));
     }
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();

@@ -27,6 +27,9 @@ pub enum WalletCommand {
     Status,
     /// Open a wallet on the running helper (asks for password safely).
     Open,
+    /// Close the open wallet, releasing its files for other apps
+    /// (e.g. the Monero GUI).
+    Close,
 }
 
 pub async fn run(args: &WalletArgs, verbose: bool) -> Result<()> {
@@ -53,6 +56,7 @@ pub async fn run(args: &WalletArgs, verbose: bool) -> Result<()> {
         },
         WalletCommand::Status => print_status(&process::status(&cfg, &client).await, verbose),
         WalletCommand::Open => open_flow(&cfg, &client).await?,
+        WalletCommand::Close => close_flow(&client).await?,
     }
     Ok(())
 }
@@ -229,6 +233,19 @@ async fn open_flow(
     unreachable!("retry loop always returns")
 }
 
+/// Close the open wallet so its files are free for other apps.
+/// Already-closed is success, not an error.
+async fn close_flow(client: &crate::wallet::rpc::WalletRpc) -> Result<()> {
+    match crate::wallet::rpc::close_wallet(client).await {
+        Ok(_) => {
+            super::ui::ok("Wallet is closed. Other apps can open it now.");
+        }
+        Err(e) => {
+            super::ui::note(&format!("No wallet to close ({e})."));
+        }
+    }
+    Ok(())
+}
 #[cfg(test)]
 mod tests {
     use super::*;

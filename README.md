@@ -40,8 +40,14 @@ xmrts init --wallet-dir ~/Monero/wallets/personal   # enables management
 xmrts wallet start    # spawn (no-op if running; refuses foreign processes on the port)
 xmrts wallet open     # open a wallet: lists .keys files, hidden password prompt
 xmrts wallet status   # process + RPC health
+xmrts wallet close    # close the wallet so the Monero GUI can open it
 xmrts wallet stop     # SIGTERM, then SIGKILL; never touches foreign pids
 ```
+
+`stamp` closes the wallet when it finishes (success or failure) so the
+Monero GUI can open it afterwards; disable with
+`xmrts setting set autoclose false` if you stamp back-to-back and prefer
+to close manually with `xmrts wallet close`.
 
 `stamp` auto-starts a configured-but-stopped sidecar. Management is
 process-lifecycle only and local-only (loopback endpoints): xmrts never

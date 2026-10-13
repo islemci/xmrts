@@ -51,6 +51,7 @@ pub enum SettingCommand {
 fn describe(cfg: &WalletConfig, key: &str) -> Result<String> {
     Ok(match key {
         "price" => cfg.price.to_string(),
+        "autoclose" => cfg.autoclose.to_string(),
         "currency" => cfg.currency.clone().unwrap_or_else(|| "usd".to_string()),
         "endpoint" => cfg.endpoint.clone(),
         "daemon" => cfg
@@ -81,6 +82,11 @@ fn apply_set(cfg: &mut WalletConfig, key: &str, value: &str) -> Result<()> {
         "price" => {
             cfg.price = value.parse().map_err(|_| {
                 anyhow::anyhow!("Price wants true or false. Got '{value}'")
+            })?;
+        }
+        "autoclose" => {
+            cfg.autoclose = value.parse().map_err(|_| {
+                anyhow::anyhow!("Autoclose wants true or false. Got '{value}'")
             })?;
         }
         "currency" => {
@@ -135,7 +141,7 @@ fn apply_unset(cfg: &mut WalletConfig, key: &str) -> Result<()> {
             cfg.password = None;
         }
         "proxy" => cfg.proxy = None,
-        "price" | "endpoint" | "network" => {
+        "price" | "endpoint" | "network" | "autoclose" => {
             anyhow::bail!("'{key}' must stay set. Cannot clear it")
         }
         _ => anyhow::bail!("Unknown setting '{key}'. Try `xmrts setting list`"),
@@ -151,6 +157,7 @@ pub fn run(args: &SettingArgs) -> Result<()> {
             super::ui::header("◆", "Settings");
             for key in [
                 "price",
+                "autoclose",
                 "currency",
                 "endpoint",
                 "daemon",
@@ -204,5 +211,8 @@ mod tests {
         assert!(apply_set(&mut cfg, "password", "x").is_err());
         assert!(apply_set(&mut cfg, "bogus", "x").is_err());
         assert!(apply_set(&mut cfg, "network", "bogus").is_err());
+        assert!(apply_set(&mut cfg, "autoclose", "maybe").is_err());
+        apply_set(&mut cfg, "autoclose", "false").unwrap();
+        assert!(!cfg.autoclose);
     }
 }

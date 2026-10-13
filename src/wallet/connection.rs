@@ -51,6 +51,12 @@ pub struct WalletConfig {
     /// feed), e.g. `socks5h://127.0.0.1:9050` for Tor.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub proxy: Option<String>,
+    /// Close the wallet in the sidecar when `stamp` finishes, releasing
+    /// the wallet files so the Monero GUI (or anything else) can open
+    /// them. `finalize`/`watch`/`verify` never need an open wallet.
+    /// Old configs predate the field and default to true.
+    #[serde(default = "default_autoclose")]
+    pub autoclose: bool,
     /// 3-letter fiat currency for estimates (`setting set currency eur`).
     /// Defaults to USD when unset.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -59,6 +65,10 @@ pub struct WalletConfig {
 
 fn default_network() -> String {
     "mainnet".to_string()
+}
+
+fn default_autoclose() -> bool {
+    true
 }
 
 impl Default for WalletConfig {
@@ -74,6 +84,7 @@ impl Default for WalletConfig {
             price: false,
             currency: None,
             proxy: None,
+            autoclose: default_autoclose(),
         }
     }
 }
@@ -381,6 +392,14 @@ mod tests {
         assert!(cfg.validate().is_err());
         cfg.proxy = Some("socks5h://127.0.0.1:9050".to_string());
         assert!(cfg.validate().is_ok());
+    }
+
+    #[test]
+    fn autoclose_defaults_to_true() {
+        assert!(WalletConfig::default().autoclose);
+        // Old configs without the field still parse, defaulting to true.
+        let cfg: WalletConfig = toml::from_str("endpoint = \"http://127.0.0.1:18082\"").unwrap();
+        assert!(cfg.autoclose);
     }
 
     #[test]

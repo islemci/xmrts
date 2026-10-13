@@ -83,6 +83,22 @@ pub(crate) fn resolve_min_confirmations(opt: Option<u64>) -> Result<u64> {
 }
 
 pub async fn run(args: &StampArgs, verbose: bool, stagenet: bool) -> Result<()> {
+    let result = run_inner(args, verbose, stagenet).await;
+    // Release the wallet files when done (success or not) so the Monero
+    // GUI or anything else can open the wallet afterwards. Best-effort:
+    // no wallet open / wallet unreachable are not stamp failures.
+    // `finalize`, `watch` and `verify` never need an open wallet.
+    let cfg = connection::load_config();
+    if cfg.autoclose && !args.offline {
+        let client = cfg.client();
+        if crate::wallet::rpc::close_wallet(&client).await.is_ok() {
+            super::ui::note("Wallet closed. Other apps can open it now.");
+        }
+    }
+    result
+}
+
+pub async fn run_inner(args: &StampArgs, verbose: bool, stagenet: bool) -> Result<()> {
     if args.json {
         super::ui::set_quiet(true);
     }

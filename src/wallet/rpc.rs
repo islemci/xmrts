@@ -281,6 +281,13 @@ pub async fn open_wallet(
     .await
 }
 
+/// `close_wallet` - closes the currently open wallet, releasing the
+/// wallet files so other apps (e.g. the Monero GUI) can open them.
+/// Errors when no wallet is open; callers treat that as already-closed.
+pub async fn close_wallet(rpc: &WalletRpc) -> Result<Value, RpcError> {
+    rpc.call("close_wallet", json!({})).await
+}
+
 /// `get_transfer_by_txid` - used to poll confirmation status.
 pub async fn get_transfer_by_txid(rpc: &WalletRpc, txid: &str) -> Result<Value, RpcError> {
     rpc.call("get_transfer_by_txid", json!({"txid": txid}))

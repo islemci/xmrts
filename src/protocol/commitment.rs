@@ -19,6 +19,10 @@ pub const NONCE_PAYLOAD_LEN: usize = 40;
 pub const TX_EXTRA_FIELD_LEN: usize = 42;
 
 const TAG_NONCE: u8 = 0x02;
+const TAG_ADDITIONAL_PUBKEYS: u8 = 0x04;
+/// Sanity cap for additional pubkeys (one per output minus one;
+/// Monero txs never approach this many outputs).
+const MAX_ADDITIONAL_PUBKEYS: u64 = 32;
 
 #[derive(Debug, Error)]
 pub enum CommitmentError {
@@ -127,14 +131,31 @@ fn read_varint(buf: &[u8], pos: &mut usize) -> Result<u64, CommitmentError> {
 }
 
 /// Scan raw `tx_extra` bytes; return every valid v1 commitment found.
-/// Unknown tags are skipped. Malformed framing aborts with an error, while
-/// a well-framed non-XMRTS nonce is simply ignored.
+/// Unknown tags are skipped. A well-framed non-XMRTS nonce is ignored.
+/// Tag 0x04 (additional pubkeys) is `varint count + 32*count` bytes, not
+/// `varint size + bytes`, and is handled explicitly: without this a
+/// subaddress/self-send-with-change tx desyncs the parser and a valid
+/// commitment later in `extra` is missed.
+/// If trailing bytes are malformed after at least one commitment was
+/// already found, the commitments found so far are returned instead of
+/// aborting with an error.
 pub fn find_commitments(tx_extra: &[u8]) -> Result<Vec<Commitment>, CommitmentError> {
     let mut out = Vec::new();
     let mut pos = 0;
     // Tag 0x00 is padding: a run of zeroes where the tag byte itself is
     // part of the count. Tag 0x01 (pubkey) is a fixed 32-byte field
-    // without a size varint. Everything else is varint tag/varint size.
+    // without a size varint. Tag 0x04 (additional pubkeys) is a varint
+    // count followed by 32 bytes per key. Everything else (0x02 nonce,
+    // 0x03 merge-mining, …) is varint size + bytes.
+    // On trailing malformation return what was found so far instead of
+    // discarding it: a commitment already parsed is still valid evidence.
+    let partial_ok = |out: &Vec<Commitment>, msg: &str| -> Result<Vec<Commitment>, CommitmentError> {
+        if out.is_empty() {
+            Err(CommitmentError::Malformed(msg.into()))
+        } else {
+            Ok(out.clone())
+        }
+    };
     while pos < tx_extra.len() {
         let tag = tx_extra[pos];
         pos += 1;
@@ -147,14 +168,31 @@ pub fn find_commitments(tx_extra: &[u8]) -> Result<Vec<Commitment>, CommitmentEr
             }
             0x01 => {
                 if pos + 32 > tx_extra.len() {
-                    return Err(CommitmentError::Malformed("truncated pubkey field".into()));
+                    return partial_ok(&out, "truncated pubkey field");
                 }
                 pos += 32;
             }
+            TAG_ADDITIONAL_PUBKEYS => {
+                let count = match read_varint(tx_extra, &mut pos) {
+                    Ok(c) => c,
+                    Err(_) => return partial_ok(&out, "truncated additional-pubkeys count"),
+                };
+                if count > MAX_ADDITIONAL_PUBKEYS {
+                    return partial_ok(&out, "additional-pubkeys count too large");
+                }
+                let need = (count as usize).saturating_mul(32);
+                if pos + need > tx_extra.len() {
+                    return partial_ok(&out, "truncated additional-pubkeys field");
+                }
+                pos += need;
+            }
             _ => {
-                let size = read_varint(tx_extra, &mut pos)? as usize;
+                let size = match read_varint(tx_extra, &mut pos) {
+                    Ok(s) => s as usize,
+                    Err(_) => return partial_ok(&out, "truncated varint"),
+                };
                 if pos + size > tx_extra.len() {
-                    return Err(CommitmentError::Malformed("truncated extra field".into()));
+                    return partial_ok(&out, "truncated extra field");
                 }
                 let body = &tx_extra[pos..pos + size];
                 pos += size;
@@ -225,5 +263,35 @@ mod tests {
         extra.extend_from_slice(&hex::decode(build_tx_extra_hex(&root)).unwrap());
         let found = find_commitments(&extra).unwrap();
         assert_eq!(found.len(), 1);
+    }
+
+    #[test]
+    fn skips_additional_pubkeys_before_commitment() {
+        // Subaddress / change tx layout: pubkey, additional pubkeys
+        // (tag 0x04, count, 32 bytes each), then our nonce. The old
+        // varint-size fallback read the count as a byte size and desynced.
+        let root = [0x33u8; 32];
+        let mut extra = vec![0x01];
+        extra.extend_from_slice(&[0xAAu8; 32]); // tx pubkey
+        extra.push(0x04);
+        extra.push(0x02); // count = 2
+        extra.extend_from_slice(&[0xBBu8; 32]);
+        extra.extend_from_slice(&[0xCCu8; 32]);
+        extra.extend_from_slice(&hex::decode(build_tx_extra_hex(&root)).unwrap());
+        let found = find_commitments(&extra).unwrap();
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].root, root);
+    }
+
+    #[test]
+    fn trailing_garbage_preserves_found_commitment() {
+        let root = [0x44u8; 32];
+        let mut extra = hex::decode(build_tx_extra_hex(&root)).unwrap();
+        extra.extend_from_slice(&[0x01, 0x02]); // truncated pubkey
+        let found = find_commitments(&extra).unwrap();
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].root, root);
+        // With nothing found, the same garbage must still error.
+        assert!(find_commitments(&[0x01, 0x02]).is_err());
     }
 }

@@ -95,6 +95,21 @@ pub async fn preview_timestamp(
                 .to_string(),
         ));
     }
+    // relay_tx consumes tx_metadata (not the blob), and both come from the
+    // same constructed tx in one `transfer` call — but they are different
+    // encodings, so verify the mark in the metadata too. A wallet that
+    // embeds the mark in the blob yet drops it from the relay payload
+    // would otherwise spend a fee with no anchor. Fail closed: nothing
+    // has been relayed at this point.
+    if let Some(meta) = raw.get("tx_metadata").and_then(Value::as_str) {
+        if !tx_blob_contains_extra(meta, extra_hex) {
+            return Err(TxError::Rejected(
+                "Wallet built the tx without our mark (`extra` missing from tx metadata). \
+                Nothing was relayed and no fee was spent."
+                    .to_string(),
+            ));
+        }
+    }
     // relay_tx consumes tx_metadata (not the blob); fall back to tx_hex.
     let tx_hex = raw
         .get("tx_metadata")

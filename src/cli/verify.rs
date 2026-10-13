@@ -229,13 +229,22 @@ fn merge_quorum(
         .ok_or_else(|| anyhow::anyhow!("No daemon answered the chain check."))?;
     for (daemon, other) in daemons.iter().skip(1).zip(it) {
         if other.height != anchor.height || other.block_hash != anchor.block_hash {
-            anyhow::bail!(
-                "Daemons disagree: {} puts tx {txid_hex} at block {} ({}), but {daemon} puts it at block {} ({}). Refusing to verify against a split chain.",
+            // List every daemon's view so the outlier is identifiable with
+            // 3+ daemons, not just the first two.
+            let mut views = vec![format!(
+                "{}: block {} ({})",
                 daemons[0],
                 anchor.height,
-                hex::encode(anchor.block_hash),
+                hex::encode(anchor.block_hash)
+            )];
+            views.push(format!(
+                "{daemon}: block {} ({})",
                 other.height,
-                hex::encode(other.block_hash),
+                hex::encode(other.block_hash)
+            ));
+            anyhow::bail!(
+                "Daemons disagree on tx {txid_hex}. Refusing to verify against a split chain:\n{}",
+                views.join("\n"),
             );
         }
         anchor.confirmations = anchor.confirmations.min(other.confirmations);

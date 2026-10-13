@@ -223,16 +223,19 @@ pub struct TransferResult {
 }
 
 /// `transfer` with an arbitrary `extra` hex payload (spec §4.2).
+/// `priority` is the Monero tx priority (0 = wallet default, 1-4 slow to
+/// fast). `ring_size` stays 0 (wallet default, consensus-enforced).
 pub async fn transfer_with_extra(
     rpc: &WalletRpc,
     destinations: Vec<Destination>,
     extra_hex: &str,
     do_not_relay: bool,
     get_tx_hex: bool,
+    priority: u32,
 ) -> Result<(TransferResult, Value), RpcError> {
     let params = json!({
         "destinations": destinations,
-        "priority": 0,
+        "priority": priority,
         "ring_size": 0,
         "unlock_time": 0,
         "get_tx_key": false,

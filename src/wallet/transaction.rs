@@ -65,6 +65,7 @@ pub async fn preview_timestamp(
     address: &str,
     amount_atomic: u64,
     extra_hex: &str,
+    priority: u32,
 ) -> Result<(TransferResult, String), TxError> {
     if address.is_empty() {
         return Err(TxError::NoAddress);
@@ -74,7 +75,7 @@ pub async fn preview_timestamp(
         amount: amount_atomic,
     };
     let (res, raw) =
-        rpc::transfer_with_extra(rpc_client, vec![dest], extra_hex, true, true).await?;
+        rpc::transfer_with_extra(rpc_client, vec![dest], extra_hex, true, true, priority).await?;
     // Definitive mark check on the blob (not the opaque metadata): the
     // wallet must have embedded our commitment in the signed tx.
     if let Some(blob) = raw.get("tx_hex").and_then(Value::as_str) {

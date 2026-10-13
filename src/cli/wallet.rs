@@ -157,7 +157,7 @@ async fn open_flow(
     })?;
     if let Ok(addr) = client.get_address().await {
         super::ui::ok("A wallet is already open.");
-        super::ui::field("Address", &addr);
+        super::ui::field("Address", &super::ui::short_address(&addr));
         return Ok(());
     }
     let wallets: Vec<String> = match &cfg.wallet_dir {
@@ -215,7 +215,7 @@ async fn open_flow(
                     .await
                     .map_err(|e| anyhow::anyhow!("Wallet opened but address is unreadable: {e}"))?;
                 super::ui::ok("Wallet is open.");
-                super::ui::field("Address", &addr);
+                super::ui::field("Address", &super::ui::short_address(&addr));
                 return Ok(());
             }
             Err(e) => {

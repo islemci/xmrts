@@ -234,9 +234,26 @@ pub fn confirm(prompt: &str) -> anyhow::Result<bool> {
 }
 
 /// Numbered choice with one keypress (`1` to `9`). Enter picks `default`.
-/// Keeps asking until the key is valid.
+/// Keeps asking until the key is valid. Lists longer than 9 entries read a
+/// full line so two-digit picks work.
 pub fn choose_number(prompt: &str, count: usize, default: usize) -> anyhow::Result<usize> {
     use std::io::Write;
+    if count > 9 {
+        loop {
+            print!("{prompt}");
+            std::io::stdout().flush()?;
+            let mut line = String::new();
+            std::io::stdin().read_line(&mut line)?;
+            let t = line.trim();
+            if t.is_empty() {
+                return Ok(default);
+            }
+            match t.parse::<usize>() {
+                Ok(n) if n >= 1 && n <= count => return Ok(n - 1),
+                _ => println!("Pick 1 to {count}."),
+            }
+        }
+    }
     loop {
         print!("{prompt}");
         std::io::stdout().flush()?;

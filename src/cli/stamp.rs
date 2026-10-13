@@ -44,6 +44,10 @@ pub struct StampArgs {
     /// Guards `--yes` / `--json` runs against congestion fee spikes.
     #[arg(long)]
     pub max_fee: Option<u64>,
+    /// Transaction priority: 0 = wallet default, 1-4 slow to fast.
+    /// Higher priorities confirm sooner but cost more.
+    #[arg(long, default_value_t = 0)]
+    pub priority: u32,
     /// Walk directories depth-first (default: top level only).
     #[arg(long)]
     pub recursive: bool,
@@ -256,6 +260,9 @@ pub async fn run(args: &StampArgs, verbose: bool, stagenet: bool) -> Result<()> 
     if args.amount == 0 {
         anyhow::bail!("--amount must be at least 1 atomic unit (dust is rejected by the network).");
     }
+    if args.priority > 4 {
+        anyhow::bail!("--priority must be 0-4 (0 = default, 1-4 slow to fast).");
+    }
     if !address_checked {
         let owned = client.owns_address(&address).await.map_err(|e| {
             anyhow::anyhow!(
@@ -287,7 +294,8 @@ pub async fn run(args: &StampArgs, verbose: bool, stagenet: bool) -> Result<()> 
 
     let fee_bar = super::ui::spinner("Checking fee...");
     let previewed =
-        transaction::preview_timestamp(&client, &address, args.amount, &extra_hex).await;
+        transaction::preview_timestamp(&client, &address, args.amount, &extra_hex, args.priority)
+            .await;
     super::ui::abandon(&fee_bar);
     let (preview, tx_hex) = previewed.map_err(|e| {
         let msg = e.to_string();
@@ -303,12 +311,12 @@ pub async fn run(args: &StampArgs, verbose: bool, stagenet: bool) -> Result<()> 
             anyhow::anyhow!("Wallet said no: {e}")
         }
     })?;
+    // One price fetch per run: the fee is known once, so both the quote
+    // and the "Fee paid" line share it instead of calling CoinGecko twice.
+    let fee_fiat = super::ui::fiat_for(preview.fee, &cfg).await;
     super::ui::field(
         "Fee",
-        &super::ui::with_fiat(
-            &transaction::format_xmr(preview.fee),
-            super::ui::fiat_for(preview.fee, &cfg).await,
-        ),
+        &super::ui::with_fiat(&transaction::format_xmr(preview.fee), fee_fiat.clone()),
     );
     if unlocked < args.amount.saturating_add(preview.fee) {
         anyhow::bail!(
@@ -392,10 +400,7 @@ pub async fn run(args: &StampArgs, verbose: bool, stagenet: bool) -> Result<()> 
     super::ui::field("Transaction", &tx_hash);
     super::ui::field(
         "Fee paid",
-        &super::ui::with_fiat(
-            &transaction::format_xmr(preview.fee),
-            super::ui::fiat_for(preview.fee, &cfg).await,
-        ),
+        &super::ui::with_fiat(&transaction::format_xmr(preview.fee), fee_fiat),
     );
     let txid_bytes: [u8; 32] = hex::decode(&tx_hash)
         .context("Wallet gave a bad tx hash")?
@@ -410,6 +415,9 @@ pub async fn run(args: &StampArgs, verbose: bool, stagenet: bool) -> Result<()> 
             "Monero averages a block every ~2 minutes; anchoring needs {min_conf} confirmation(s) (~{} minutes).",
             min_conf * 2
         ));
+        super::ui::hint(
+            "Ctrl-C is safe here: the pending record is saved, resume with `xmrts finalize`.",
+        );
         let bar = super::ui::spinner("Waiting for block...");
         let found = wait_for_confirmation(&client, &tx_hash, &bar).await;
         super::ui::abandon(&bar);

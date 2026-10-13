@@ -142,7 +142,7 @@ pub async fn run(args: &ConnectArgs, verbose: bool, stagenet: bool) -> Result<()
         }
     }
     match client.get_address().await {
-        Ok(a) => super::ui::field("Address", &a),
+        Ok(a) => super::ui::field("Address", &super::ui::short_address(&a)),
         Err(_) => super::ui::note("No address yet. Is a wallet open?"),
     }
 

@@ -40,6 +40,10 @@ pub struct StampArgs {
     /// the fee is lost.
     #[arg(long, default_value_t = 10_000)]
     pub amount: u64,
+    /// Refuse to send when the quoted fee is above this many atomic units.
+    /// Guards `--yes` / `--json` runs against congestion fee spikes.
+    #[arg(long)]
+    pub max_fee: Option<u64>,
     /// Walk directories depth-first (default: top level only).
     #[arg(long)]
     pub recursive: bool,
@@ -244,15 +248,37 @@ pub async fn run(args: &StampArgs, verbose: bool, stagenet: bool) -> Result<()> 
             .context("No open wallet. Open one with `xmrts wallet open` first")
             .map(|a| (a, true))?,
     };
-    if !address_checked && !client.owns_address(&address).await.unwrap_or(false) {
-        anyhow::bail!(
-            "That address is outside this wallet:\n{address}\nSkip --address to use your own."
-        );
+    if args.amount == 0 {
+        anyhow::bail!("--amount must be at least 1 atomic unit (dust is rejected by the network).");
     }
-    let (balance, _unlocked) = client.get_balance().await.unwrap_or((0, 0));
+    if !address_checked {
+        let owned = client.owns_address(&address).await.map_err(|e| {
+            anyhow::anyhow!(
+                "Could not check address ownership: {e}\nSkip --address to use your own."
+            )
+        })?;
+        if !owned {
+            anyhow::bail!(
+                "That address is outside this wallet:\n{address}\nSkip --address to use your own."
+            );
+        }
+    }
+    let (balance, unlocked) = client.get_balance().await.unwrap_or((0, 0));
     super::ui::field("Network", &network_name);
     super::ui::field("To (self)", &super::ui::short_address(&address));
-    super::ui::field("Balance", &transaction::format_xmr(balance));
+    super::ui::field(
+        "Balance",
+        &format!(
+            "{} ({} unlocked)",
+            transaction::format_xmr(balance),
+            transaction::format_xmr(unlocked)
+        ),
+    );
+    if unlocked == 0 {
+        super::ui::warn(
+            "No unlocked funds. The transfer will fail until outputs unlock (10 blocks).",
+        );
+    }
 
     let fee_bar = super::ui::spinner("Checking fee...");
     let previewed =
@@ -279,6 +305,29 @@ pub async fn run(args: &StampArgs, verbose: bool, stagenet: bool) -> Result<()> 
             super::ui::fiat_for(preview.fee, &cfg).await,
         ),
     );
+    if unlocked < args.amount.saturating_add(preview.fee) {
+        anyhow::bail!(
+            "Not enough unlocked funds: need {} (amount + fee) but only {} is unlocked. Wait for outputs to unlock (10 blocks) or lower --amount.",
+            transaction::format_xmr(args.amount.saturating_add(preview.fee)),
+            transaction::format_xmr(unlocked)
+        );
+    }
+    if args.amount > preview.fee.saturating_mul(100).max(1_000_000) {
+        super::ui::warn(&format!(
+            "Amount {} dwarfs the fee {}. It returns to you, but forces more inputs (bigger tx, higher fee). Consider the default 10000.",
+            transaction::format_xmr(args.amount),
+            transaction::format_xmr(preview.fee)
+        ));
+    }
+    if let Some(cap) = args.max_fee {
+        if preview.fee > cap {
+            anyhow::bail!(
+                "Fee {} is above --max-fee {}. Not sending.",
+                transaction::format_xmr(preview.fee),
+                transaction::format_xmr(cap)
+            );
+        }
+    }
     let pending_path = pending::save(&PendingOp {
         files: inputs
             .iter()

@@ -156,7 +156,12 @@ pub async fn run(args: &StampArgs, verbose: bool, stagenet: bool) -> Result<()> 
     if stagenet {
         cfg.network = "stagenet".to_string();
     }
-    let network = Network::from_str(&cfg.network).unwrap_or(Network::Mainnet);
+    let network = Network::from_str(&cfg.network).map_err(|e| {
+        anyhow::anyhow!(
+            "Saved network '{}' is invalid ({e}). Fix with `xmrts connect --network mainnet`.",
+            cfg.network
+        )
+    })?;
     let network_name = network.as_str().to_string();
 
     if args.offline {

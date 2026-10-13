@@ -94,6 +94,9 @@ fn apply_set(cfg: &mut WalletConfig, key: &str, value: &str) -> Result<()> {
                 .map_err(|e| anyhow::anyhow!("Not using that: {e}"))?;
         }
         "daemon" => {
+            if !(value.starts_with("http://") || value.starts_with("https://")) {
+                anyhow::bail!("Daemon wants an http(s)://host:port URL. Got '{value}'");
+            }
             cfg.daemon_endpoint = Some(value.to_string());
         }
         "network" => {

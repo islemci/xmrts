@@ -87,7 +87,30 @@ pub fn save(op: &PendingOp) -> Result<PathBuf> {
     };
     let _ = connection::ensure_dirs();
     let _ = &dir;
-    let path = path_for_root(&op.root).ok_or_else(|| anyhow::anyhow!("no config dir"))?;
+    let mut path = path_for_root(&op.root).ok_or_else(|| anyhow::anyhow!("no config dir"))?;
+    // Same file set re-stamped must not clobber the earlier pending (its
+    // txid is the only link to the broadcast tx). Resume of the same txid
+    // reuses the path; a different txid gets a suffixed path.
+    if path.exists() {
+        let same_txid = load(&path)
+            .map(|prev| prev.txid == op.txid)
+            .unwrap_or(false);
+        if !same_txid {
+            let stem = path
+                .file_stem()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "pending".to_string());
+            let mut n = 2u32;
+            loop {
+                let cand = dir.join(format!("{stem}-{n}.json"));
+                if !cand.exists() {
+                    path = cand;
+                    break;
+                }
+                n += 1;
+            }
+        }
+    }
     // Atomic + owner-only: crash-safe recovery record (M3). Holds tx
     // metadata and the list of stamped file paths.
     connection::atomic_write_0600(&path, serde_json::to_string_pretty(op)?.as_bytes())?;

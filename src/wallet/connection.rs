@@ -92,6 +92,11 @@ impl WalletConfig {
         if !(self.endpoint.starts_with("http://") || self.endpoint.starts_with("https://")) {
             return Err(ConnectionError::BadEndpoint(self.endpoint.clone()));
         }
+        if let Some(d) = &self.daemon_endpoint {
+            if !(d.starts_with("http://") || d.starts_with("https://")) {
+                return Err(ConnectionError::BadEndpoint(d.clone()));
+            }
+        }
         Network::from_str(&self.network).map_err(|e| ConnectionError::Config(e.to_string()))?;
         Ok(())
     }

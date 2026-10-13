@@ -152,7 +152,8 @@ fn prompt_line(prompt: &str) -> Result<String> {
 
 /// Interactive `open_wallet`. Password comes from a hidden prompt.
 /// It lives in wiped memory for one call only. Never saved or logged.
-async fn open_flow(
+/// `pub(crate)` so `stamp` can auto-open when nothing is open yet.
+pub(crate) async fn open_flow(
     cfg: &connection::WalletConfig,
     client: &crate::wallet::rpc::WalletRpc,
 ) -> Result<()> {

@@ -47,7 +47,9 @@ xmrts wallet stop     # SIGTERM, then SIGKILL; never touches foreign pids
 `stamp` closes the wallet when it finishes (success or failure) so the
 Monero GUI can open it afterwards; disable with
 `xmrts setting set autoclose false` if you stamp back-to-back and prefer
-to close manually with `xmrts wallet close`.
+to close manually with `xmrts wallet close`. When no wallet is open,
+`stamp` offers to open one right away (hidden password prompt, never
+stored); scripts and pipes still fail with a clear message instead.
 
 `stamp` auto-starts a configured-but-stopped sidecar. Management is
 process-lifecycle only and local-only (loopback endpoints): xmrts never

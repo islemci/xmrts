@@ -305,11 +305,25 @@ pub async fn run_inner(args: &StampArgs, verbose: bool, stagenet: bool) -> Resul
     }
     let (address, address_checked) = match &args.address {
         Some(a) => (a.clone(), false),
-        None => client
-            .get_address()
-            .await
-            .context("No open wallet. Open one with `xmrts wallet open` first")
-            .map(|a| (a, true))?,
+        None => match client.get_address().await {
+            Ok(a) => (a, true),
+            Err(_) => {
+                // No wallet open yet: run the open flow inline (wallet
+                // list + hidden password prompt) instead of failing. The
+                // password is never stored; non-interactive runs cannot
+                // answer a prompt, so they still fail loudly.
+                if !super::ui::is_interactive() {
+                    anyhow::bail!("No open wallet. Open one with `xmrts wallet open` first");
+                }
+                super::ui::note("No wallet is open. Opening one now...");
+                super::wallet::open_flow(&cfg, &client).await?;
+                let a = client
+                    .get_address()
+                    .await
+                    .context("Wallet still gives no address after opening it")?;
+                (a, true)
+            }
+        },
     };
     if args.amount == 0 {
         anyhow::bail!("--amount must be at least 1 atomic unit (dust is rejected by the network).");

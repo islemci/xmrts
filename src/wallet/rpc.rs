@@ -43,11 +43,15 @@ impl WalletRpc {
         endpoint: impl Into<String>,
         username: Option<String>,
         password: Option<String>,
+        proxy: Option<String>,
     ) -> Self {
-        let client = Client::builder()
-            .timeout(Duration::from_secs(30))
-            .build()
-            .expect("reqwest client");
+        let mut builder = Client::builder().timeout(Duration::from_secs(30));
+        if let Some(p) = proxy.filter(|p| super::connection::is_valid_proxy(p)) {
+            if let Ok(proxy) = reqwest::Proxy::all(&p) {
+                builder = builder.proxy(proxy);
+            }
+        }
+        let client = builder.build().expect("reqwest client");
         Self {
             endpoint: endpoint.into(),
             client,

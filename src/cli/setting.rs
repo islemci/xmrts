@@ -31,7 +31,7 @@ pub enum SettingCommand {
     /// Show one setting.
     Get {
         /// Name: price, currency, endpoint, daemon, network,
-        /// wallet-dir, wallet-rpc-path, username
+        /// wallet-dir, wallet-rpc-path, username, proxy
         key: String,
     },
     /// Change one setting.
@@ -43,7 +43,7 @@ pub enum SettingCommand {
     },
     /// Clear an optional setting.
     Unset {
-        /// Name: currency, daemon, wallet-dir, wallet-rpc-path, username
+        /// Name: currency, daemon, wallet-dir, wallet-rpc-path, username, proxy
         key: String,
     },
 }
@@ -70,6 +70,7 @@ fn describe(cfg: &WalletConfig, key: &str) -> Result<String> {
             .username
             .clone()
             .unwrap_or_else(|| "(empty)".to_string()),
+        "proxy" => cfg.proxy.clone().unwrap_or_else(|| "(empty)".to_string()),
         "password" => "(hidden)".to_string(),
         _ => anyhow::bail!("Unknown setting '{key}'. Try `xmrts setting list`"),
     })
@@ -107,6 +108,14 @@ fn apply_set(cfg: &mut WalletConfig, key: &str, value: &str) -> Result<()> {
         "wallet-dir" => cfg.wallet_dir = Some(value.to_string()),
         "wallet-rpc-path" => cfg.wallet_rpc_path = Some(value.to_string()),
         "username" => cfg.username = Some(value.to_string()),
+        "proxy" => {
+            if !crate::wallet::connection::is_valid_proxy(value) {
+                anyhow::bail!(
+                    "Proxy wants a socks5h://, socks5://, http:// or https:// URL. Got '{value}'"
+                );
+            }
+            cfg.proxy = Some(value.to_string());
+        }
         "password" => anyhow::bail!(
             "Use connect for passwords.\nRun `xmrts connect --username YOU --save-auth` and type it when asked"
         ),
@@ -125,6 +134,7 @@ fn apply_unset(cfg: &mut WalletConfig, key: &str) -> Result<()> {
             cfg.username = None;
             cfg.password = None;
         }
+        "proxy" => cfg.proxy = None,
         "price" | "endpoint" | "network" => {
             anyhow::bail!("'{key}' must stay set. Cannot clear it")
         }
@@ -149,6 +159,7 @@ pub fn run(args: &SettingArgs) -> Result<()> {
                 "wallet-rpc-path",
                 "username",
                 "password",
+                "proxy",
             ] {
                 super::ui::field(key, &describe(&cfg, key)?);
             }

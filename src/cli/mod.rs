@@ -1,6 +1,7 @@
 //! CLI orchestration: `init/connect/stamp/verify/doctor`.
 //! Depends on protocol + wallet; neither depends back on CLI.
 
+pub mod audit;
 pub mod connect;
 pub mod doctor;
 pub mod finalize;
@@ -46,6 +47,8 @@ pub enum Command {
     Stamp(stamp::StampArgs),
     /// Verify a file against a .xmrts proof.
     Verify(verify::VerifyArgs),
+    /// Re-verify saved proofs against the chain tip.
+    Audit(audit::AuditArgs),
     /// Diagnose the installation.
     Doctor(doctor::DoctorArgs),
     /// Finish a pending stamp into anchored proofs (no new transaction).

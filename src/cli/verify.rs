@@ -295,7 +295,7 @@ fn fail_exit_json(json: bool, err: &str) -> ! {
     std::process::exit(1);
 }
 
-async fn blockchain_check(
+pub(crate) async fn blockchain_check(
     proof: &Proof,
     daemon_overrides: &[String],
     stagenet: bool,

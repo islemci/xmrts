@@ -33,6 +33,9 @@ pub struct ConnectArgs {
     /// Daemon address for checks, like http://127.0.0.1:18081
     #[arg(long)]
     pub daemon: Option<String>,
+    /// Proxy for all network calls, e.g. socks5h://127.0.0.1:9050 for Tor.
+    #[arg(long)]
+    pub proxy: Option<String>,
 }
 
 pub async fn run(args: &ConnectArgs, verbose: bool, stagenet: bool) -> Result<()> {
@@ -89,6 +92,9 @@ pub async fn run(args: &ConnectArgs, verbose: bool, stagenet: bool) -> Result<()
     }
     if let Some(d) = &args.daemon {
         cfg.daemon_endpoint = Some(d.clone());
+    }
+    if let Some(p) = &args.proxy {
+        cfg.proxy = Some(p.clone());
     }
     cfg.validate()
         .map_err(|e| anyhow::anyhow!("Settings look wrong: {e}"))?;

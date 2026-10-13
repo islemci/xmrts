@@ -36,7 +36,10 @@ pub async fn xmr_price(currency: &str) -> Result<f64, PriceError> {
         format!("https://api.coingecko.com/api/v3/simple/price?ids=monero&vs_currencies={cur}");
     // CoinGecko's firewall rejects requests without a descriptive
     // User-Agent (HTTP 403), so identify honestly.
-    let resp: serde_json::Value = reqwest::Client::new()
+    let client = super::connection::http_client_builder()
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new());
+    let resp: serde_json::Value = client
         .get(&url)
         .header(
             reqwest::header::USER_AGENT,

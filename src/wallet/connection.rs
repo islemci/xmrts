@@ -47,6 +47,10 @@ pub struct WalletConfig {
     /// Show fiat estimates next to XMR amounts (`setting set price true`).
     #[serde(default)]
     pub price: bool,
+    /// HTTP/SOCKS proxy for all network calls (daemon, wallet RPC, price
+    /// feed), e.g. `socks5h://127.0.0.1:9050` for Tor.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proxy: Option<String>,
     /// 3-letter fiat currency for estimates (`setting set currency eur`).
     /// Defaults to USD when unset.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -69,6 +73,7 @@ impl Default for WalletConfig {
             wallet_dir: None,
             price: false,
             currency: None,
+            proxy: None,
         }
     }
 }
@@ -97,6 +102,13 @@ impl WalletConfig {
                 return Err(ConnectionError::BadEndpoint(d.clone()));
             }
         }
+        if let Some(p) = &self.proxy {
+            if !is_valid_proxy(p) {
+                return Err(ConnectionError::Config(format!(
+                    "bad proxy '{p}': want socks5h://, socks5://, http:// or https:// URL"
+                )));
+            }
+        }
         Network::from_str(&self.network).map_err(|e| ConnectionError::Config(e.to_string()))?;
         Ok(())
     }
@@ -106,8 +118,31 @@ impl WalletConfig {
             self.endpoint.clone(),
             self.username.clone(),
             self.password.clone(),
+            self.proxy.clone(),
         )
     }
+}
+
+/// True for proxy URLs reqwest can use: socks5h (remote DNS, prefer for
+/// Tor), socks5, http, https.
+pub fn is_valid_proxy(url: &str) -> bool {
+    ["socks5h://", "socks5://", "http://", "https://"]
+        .iter()
+        .any(|s| url.to_ascii_lowercase().starts_with(s))
+}
+
+/// Base HTTP client builder honoring the *saved* proxy setting, if any.
+/// Daemon and price-feed code paths (which only receive an endpoint, not
+/// the full config) build through here so `--proxy` covers every network
+/// call xmrts makes. Callers set their own timeout on top.
+pub fn http_client_builder() -> reqwest::ClientBuilder {
+    let mut b = reqwest::Client::builder();
+    if let Some(proxy) = load_config().proxy.filter(|p| is_valid_proxy(p)) {
+        if let Ok(p) = reqwest::Proxy::all(&proxy) {
+            b = b.proxy(p);
+        }
+    }
+    b
 }
 
 /// True when a daemon/wallet endpoint URL points at loopback.
@@ -330,6 +365,22 @@ mod tests {
             ..WalletConfig::default()
         };
         assert!(!cfg.is_remote());
+    }
+
+    #[test]
+    fn validates_proxy_urls() {
+        assert!(is_valid_proxy("socks5h://127.0.0.1:9050"));
+        assert!(is_valid_proxy("socks5://127.0.0.1:9050"));
+        assert!(is_valid_proxy("http://proxy:8080"));
+        assert!(is_valid_proxy("https://proxy:8080"));
+        assert!(!is_valid_proxy("proxy:8080"));
+        assert!(!is_valid_proxy("ftp://proxy:21"));
+        assert!(!is_valid_proxy(""));
+        let mut cfg = WalletConfig::default();
+        cfg.proxy = Some("bogus".to_string());
+        assert!(cfg.validate().is_err());
+        cfg.proxy = Some("socks5h://127.0.0.1:9050".to_string());
+        assert!(cfg.validate().is_ok());
     }
 
     #[test]

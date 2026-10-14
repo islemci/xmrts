@@ -77,8 +77,13 @@ pub async fn preview_timestamp(
     let (res, raw) =
         rpc::transfer_with_extra(rpc_client, vec![dest], extra_hex, true, true, priority).await?;
     // Definitive mark check on the blob (not the opaque metadata): the
-    // wallet must have embedded our commitment in the signed tx.
-    if let Some(blob) = raw.get("tx_hex").and_then(Value::as_str) {
+    // wallet must have embedded our commitment in the signed tx. Stock
+    // Monero names the field `tx_blob`; accept `tx_hex` too (some builds).
+    let blob = raw
+        .get("tx_hex")
+        .or_else(|| raw.get("tx_blob"))
+        .and_then(Value::as_str);
+    if let Some(blob) = blob {
         if !tx_blob_contains_extra(blob, extra_hex) {
             return Err(TxError::Rejected(
                 "Wallet built the tx without our mark (`extra` missing from tx blob). \
@@ -89,12 +94,17 @@ pub async fn preview_timestamp(
         }
     } else {
         // `get_tx_hex=true` was requested: no blob means we cannot prove
-        // the mark. Fail closed rather than risk a mark-less relay.
-        return Err(TxError::Rejected(
-            "Wallet did not return the signed tx blob (`tx_hex`); cannot verify the mark. \
+        // the mark. Fail closed rather than risk a mark-less relay. The
+        // response keys are included so a wallet returning a new shape is
+        // diagnosable instead of a dead end.
+        let keys = raw
+            .as_object()
+            .map(|o| o.keys().map(String::as_str).collect::<Vec<_>>().join(", "))
+            .unwrap_or_else(|| "<non-object>".to_string());
+        return Err(TxError::Rejected(format!(
+            "Wallet did not return the signed tx blob (`tx_hex`/`tx_blob`; response keys: {keys}); cannot verify the mark. \
             Nothing was relayed."
-                .to_string(),
-        ));
+        )));
     }
     // relay_tx consumes tx_metadata (not the blob), and both come from the
     // same constructed tx in one `transfer` call — but they are different

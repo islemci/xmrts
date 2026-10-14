@@ -33,7 +33,8 @@ pub struct ConnectArgs {
     /// Daemon address for checks, like http://127.0.0.1:18081
     #[arg(long)]
     pub daemon: Option<String>,
-    /// Proxy for all network calls, e.g. socks5h://127.0.0.1:9050 for Tor.
+    /// Proxy for daemon and price-feed traffic, e.g. socks5h://127.0.0.1:9050
+    /// for Tor. Loopback endpoints (local wallet/daemon) always bypass it.
     #[arg(long)]
     pub proxy: Option<String>,
 }

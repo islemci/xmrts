@@ -85,12 +85,14 @@ impl DaemonClient {
     pub fn new(endpoint: impl Into<String>) -> Self {
         // Daemon calls happen mid-flow (stamp/verify/finalize): a
         // black-holing endpoint must time out, never hang the command.
-        let client = super::connection::http_client_builder()
+        // Loopback daemons bypass the proxy; remote daemons use it.
+        let endpoint_str: String = endpoint.into();
+        let client = super::connection::http_client_builder_for(Some(&endpoint_str))
             .timeout(std::time::Duration::from_secs(30))
             .build()
             .unwrap_or_else(|_| reqwest::Client::new());
         Self {
-            endpoint: endpoint.into(),
+            endpoint: endpoint_str,
             client,
         }
     }
@@ -161,7 +163,7 @@ pub fn format_block_time(timestamp: u64) -> String {
 /// zeros when unavailable - height is the load-bearing field).
 pub async fn block_hash(daemon_endpoint: &str, height: u64) -> Result<[u8; 32], DaemonError> {
     let url = format!("{}/json_rpc", daemon_endpoint.trim_end_matches('/'));
-    let client = super::connection::http_client_builder()
+    let client = super::connection::http_client_builder_for(Some(daemon_endpoint))
         .timeout(std::time::Duration::from_secs(30))
         .build()
         .unwrap_or_else(|_| reqwest::Client::new());
@@ -201,7 +203,7 @@ pub async fn block_header(
     height: u64,
 ) -> Result<([u8; 32], u64), DaemonError> {
     let url = format!("{}/json_rpc", daemon_endpoint.trim_end_matches('/'));
-    let client = super::connection::http_client_builder()
+    let client = super::connection::http_client_builder_for(Some(daemon_endpoint))
         .timeout(std::time::Duration::from_secs(30))
         .build()
         .unwrap_or_else(|_| reqwest::Client::new());
@@ -312,7 +314,7 @@ pub async fn confirm_commitment_for_version(
 /// Daemon `get_info`: returns (nettype, chain height).
 pub async fn get_info(daemon_endpoint: &str) -> Result<(String, u64), DaemonError> {
     let url = format!("{}/json_rpc", daemon_endpoint.trim_end_matches('/'));
-    let client = super::connection::http_client_builder()
+    let client = super::connection::http_client_builder_for(Some(daemon_endpoint))
         .timeout(std::time::Duration::from_secs(30))
         .build()
         .unwrap_or_else(|_| reqwest::Client::new());

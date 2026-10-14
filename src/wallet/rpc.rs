@@ -45,15 +45,19 @@ impl WalletRpc {
         password: Option<String>,
         proxy: Option<String>,
     ) -> Self {
+        let endpoint_str: String = endpoint.into();
         let mut builder = Client::builder().timeout(Duration::from_secs(30));
-        if let Some(p) = proxy.filter(|p| super::connection::is_valid_proxy(p)) {
+        // Never proxy loopback wallet RPC: it can carry the `open_wallet`
+        // password, Tor cannot reach loopback, and a remote proxy operator
+        // must not see local wallet commands.
+        if let Some(p) = super::connection::effective_proxy(Some(&endpoint_str), proxy.as_deref()) {
             if let Ok(proxy) = reqwest::Proxy::all(&p) {
                 builder = builder.proxy(proxy);
             }
         }
         let client = builder.build().expect("reqwest client");
         Self {
-            endpoint: endpoint.into(),
+            endpoint: endpoint_str,
             client,
             username,
             password,

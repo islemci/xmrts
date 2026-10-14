@@ -47,8 +47,11 @@ pub struct WalletConfig {
     /// Show fiat estimates next to XMR amounts (`setting set price true`).
     #[serde(default)]
     pub price: bool,
-    /// HTTP/SOCKS proxy for all network calls (daemon, wallet RPC, price
-    /// feed), e.g. `socks5h://127.0.0.1:9050` for Tor.
+    /// HTTP/SOCKS proxy for daemon and price-feed traffic, e.g.
+    /// `socks5h://127.0.0.1:9050` for Tor. Loopback endpoints (wallet RPC
+    /// on 127.0.0.1/localhost/::1, local daemons) always bypass the proxy:
+    /// wallet `open_wallet` carries the wallet password and must never go
+    /// through a (possibly remote) proxy, and Tor cannot reach loopback.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub proxy: Option<String>,
     /// Close the wallet in the sidecar when `stamp` finishes, releasing
@@ -155,18 +158,39 @@ pub fn is_valid_proxy(url: &str) -> bool {
         .any(|s| url.to_ascii_lowercase().starts_with(s))
 }
 
+/// Effective proxy for an endpoint: `None` for loopback endpoints (never
+/// proxy local wallet/daemon traffic), otherwise the configured proxy when
+/// valid. Testable without building a reqwest client.
+pub fn effective_proxy(endpoint: Option<&str>, proxy: Option<&str>) -> Option<String> {
+    if let Some(ep) = endpoint {
+        if endpoint_is_loopback(ep) {
+            return None;
+        }
+    }
+    proxy.filter(|p| is_valid_proxy(p)).map(String::from)
+}
+
 /// Base HTTP client builder honoring the *saved* proxy setting, if any.
-/// Daemon and price-feed code paths (which only receive an endpoint, not
-/// the full config) build through here so `--proxy` covers every network
-/// call xmrts makes. Callers set their own timeout on top.
-pub fn http_client_builder() -> reqwest::ClientBuilder {
+/// The proxy applies to daemon and price-feed traffic only. When `endpoint`
+/// is a loopback URL the proxy is skipped: local wallet RPC (which can
+/// carry the `open_wallet` password) must never go through a proxy, and a
+/// proxy (local Tor or remote) cannot or should not carry loopback traffic.
+/// Callers set their own timeout on top.
+pub fn http_client_builder_for(endpoint: Option<&str>) -> reqwest::ClientBuilder {
     let mut b = reqwest::Client::builder();
-    if let Some(proxy) = load_config().proxy.filter(|p| is_valid_proxy(p)) {
+    let cfg = load_config();
+    if let Some(proxy) = effective_proxy(endpoint, cfg.proxy.as_deref()) {
         if let Ok(p) = reqwest::Proxy::all(&proxy) {
             b = b.proxy(p);
         }
     }
     b
+}
+
+/// Backwards-compatible builder without endpoint context: applies the proxy
+/// (used for remote-only traffic such as the price feed).
+pub fn http_client_builder() -> reqwest::ClientBuilder {
+    http_client_builder_for(None)
 }
 
 /// True when a daemon/wallet endpoint URL points at loopback.
@@ -389,6 +413,25 @@ mod tests {
             ..WalletConfig::default()
         };
         assert!(!cfg.is_remote());
+    }
+
+    #[test]
+    fn loopback_endpoints_bypass_proxy() {
+        let proxy = Some("socks5h://127.0.0.1:9050");
+        assert_eq!(effective_proxy(Some("http://127.0.0.1:18082"), proxy), None);
+        assert_eq!(effective_proxy(Some("http://localhost:18082"), proxy), None);
+        assert_eq!(effective_proxy(Some("http://[::1]:18082"), proxy), None);
+        assert_eq!(effective_proxy(Some("http://127.0.0.1:18081"), proxy), None);
+        // Remote endpoints keep the proxy; invalid proxies are dropped.
+        assert_eq!(
+            effective_proxy(Some("http://node.example:18081"), proxy),
+            Some("socks5h://127.0.0.1:9050".to_string())
+        );
+        assert_eq!(
+            effective_proxy(Some("http://node.example:18081"), Some("bogus")),
+            None
+        );
+        assert_eq!(effective_proxy(None, proxy), proxy.map(String::from));
     }
 
     #[test]

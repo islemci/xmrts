@@ -129,10 +129,19 @@ pub async fn run_inner(args: &StampArgs, verbose: bool, stagenet: bool) -> Resul
         let mut sigs = 0usize;
         for f in inputs.clone() {
             let sig = PathBuf::from(format!("{}.sig", f.display()));
+            // Never silently clobber an existing signature: a stale .sig
+            // from an older file version would bind the wrong bytes.
+            if sig.exists() {
+                anyhow::bail!(
+                    "Signature file {} already exists. Remove it (or move it aside) to sign again. Nothing stamped.",
+                    sig.display()
+                );
+            }
             super::ui::note(&format!("Signing {} ...", f.display()));
+            // No `--yes`: gpg must never overwrite an existing .sig on its
+            // own; the existence check above fails first.
             let status = std::process::Command::new("gpg")
                 .args([
-                    "--yes",
                     "--detach-sign",
                     "--local-user",
                     key,

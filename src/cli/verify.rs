@@ -30,10 +30,17 @@ pub struct VerifyArgs {
     #[arg(long)]
     pub json: bool,
     /// Detached GPG signature to check as well (from `stamp --sign-with`).
-    /// The signature itself is verified by GPG; the timestamp proves the
-    /// signed file existed no later than the anchor block.
+    /// The signature itself is verified by GPG; its own proof
+    /// (`<sig>.xmrts`) must anchor in the SAME transaction as the file
+    /// proof, binding authorship to the timestamp. The signer's fingerprint
+    /// is printed on success.
     #[arg(long)]
     pub sig: Option<PathBuf>,
+    /// Location of the `.sig` proof when proofs live away from the files
+    /// (e.g. `stamp --out-dir`). Defaults to `<sig>.xmrts` next to the
+    /// signature, falling back to the main proof's directory.
+    #[arg(long)]
+    pub sig_proof: Option<PathBuf>,
 }
 
 pub async fn run(args: &VerifyArgs, verbose: bool, stagenet: bool) -> Result<()> {
@@ -91,34 +98,49 @@ pub async fn run(args: &VerifyArgs, verbose: bool, stagenet: bool) -> Result<()>
         }
     }
 
-    if let Some(sig) = &args.sig {
-        let status = std::process::Command::new("gpg")
-            .args([
-                "--verify",
-                &sig.to_string_lossy(),
-                &args.file.to_string_lossy(),
-            ])
-            .status();
-        match status {
-            Ok(s) if s.success() => super::ui::ok("GPG signature is valid."),
-            Ok(_) => {
-                super::ui::fail("Check failed.");
-                if !args.json {
-                    println!();
-                    println!("Why:\nGPG signature does not verify for this file.");
-                }
-                fail_exit_json(args.json, "GPG signature does not verify for this file");
-            }
+    // Detached signature binding: gpg proves authorship NOW, the sig proof
+    // binds that signature to the SAME timestamp transaction as the file.
+    // Without this, a signature made years later would still `gpg --verify`.
+    let signer: Option<String> = if let Some(sig) = &args.sig {
+        let fingerprint = match run_gpg_verify(sig, &args.file) {
+            Ok(fp) => fp,
             Err(e) => {
                 super::ui::fail("Check failed.");
                 if !args.json {
                     println!();
-                    println!("Why:\nCould not run gpg ({e}). Is GnuPG installed?");
+                    println!("Why:\n{e}");
                 }
-                fail_exit_json(args.json, &format!("could not run gpg: {e}"));
+                fail_exit_json(args.json, &format!("{e}"));
+            }
+        };
+        match check_sig_binding(&proof, sig, args.sig_proof.as_deref(), &args.proof) {
+            Ok(()) => {}
+            Err(e) => {
+                super::ui::fail("Check failed.");
+                if !args.json {
+                    println!();
+                    println!("Why:\n{e}");
+                }
+                fail_exit_json(args.json, &format!("{e}"));
             }
         }
-    }
+        if !args.json {
+            super::ui::field("Signer", &fingerprint);
+        }
+        super::ui::ok("GPG signature is valid and anchored with the file.");
+        Some(fingerprint)
+    } else {
+        if args.sig_proof.is_some() {
+            super::ui::fail("Check failed.");
+            let e = "--sig-proof needs --sig: pass both or neither.";
+            if !args.json {
+                println!();
+                println!("Why:\n{e}");
+            }
+            fail_exit_json(args.json, e);
+        }
+        None
+    };
 
     if proof.is_pending() {
         if args.offline {
@@ -128,13 +150,17 @@ pub async fn run(args: &VerifyArgs, verbose: bool, stagenet: bool) -> Result<()>
                 println!("Not anchored yet. Run `xmrts stamp` without --offline.");
             }
             if args.json {
-                print_json(&serde_json::json!({
+                let mut v = serde_json::json!({
                     "ok": true, "anchored": false, "final": false,
                     "warnings": ["pending proof: no block yet; crypto only"],
                     "file_hash": hex::encode(file_hash),
                     "root": hex::encode(proof.root),
                     "network": proof.network.as_str(),
-                }));
+                });
+                if let Some(s) = &signer {
+                    v["signer"] = serde_json::Value::String(s.clone());
+                }
+                print_json(&v);
             }
             return Ok(());
         }
@@ -153,7 +179,7 @@ pub async fn run(args: &VerifyArgs, verbose: bool, stagenet: bool) -> Result<()>
             println!("Crypto passed. Chain not checked.");
         }
         if args.json {
-            print_json(&serde_json::json!({
+            let mut v = serde_json::json!({
                 "ok": true, "anchored": false, "chain_checked": false, "final": false,
                 "warnings": ["chain not checked (--offline); crypto only"],
                 "file_hash": hex::encode(file_hash),
@@ -161,7 +187,11 @@ pub async fn run(args: &VerifyArgs, verbose: bool, stagenet: bool) -> Result<()>
                 "txid": hex::encode(proof.txid),
                 "block_height": proof.block_height,
                 "network": proof.network.as_str(),
-            }));
+            });
+            if let Some(s) = &signer {
+                v["signer"] = serde_json::Value::String(s.clone());
+            }
+            print_json(&v);
         }
         return Ok(());
     }
@@ -232,6 +262,7 @@ pub async fn run(args: &VerifyArgs, verbose: bool, stagenet: bool) -> Result<()>
                     min_conf,
                     is_final,
                     &daemons_used,
+                    signer.as_deref(),
                 ));
             }
         }
@@ -289,6 +320,7 @@ fn merge_quorum(
 /// Machine-readable anchored-verdict document. Built by a pure function
 /// so the field contract (types included) is pinned by unit tests:
 /// automation parses stdout, so fields must never silently change shape.
+#[allow(clippy::too_many_arguments)]
 fn anchored_json(
     file_hash: &[u8; 32],
     proof: &Proof,
@@ -297,8 +329,9 @@ fn anchored_json(
     min_conf: u64,
     is_final: bool,
     daemons: &[String],
+    signer: Option<&str>,
 ) -> serde_json::Value {
-    serde_json::json!({
+    let mut v = serde_json::json!({
         "ok": true, "anchored": true, "chain_checked": true,
         "final": is_final,
         "warnings": warnings,
@@ -313,7 +346,167 @@ fn anchored_json(
         "network": proof.network.as_str(),
         "daemon": daemons.first().cloned().unwrap_or_default(),
         "daemons": daemons,
-    })
+    });
+    if let Some(s) = signer {
+        v["signer"] = serde_json::Value::String(s.to_string());
+    }
+    v
+}
+
+/// Verify a detached GPG signature and return the signer's fingerprint.
+/// Uses `--status-fd 1` so the fingerprint is machine-readable (`VALIDSIG`)
+/// instead of parsing human text. A signature made at any time verifies
+/// here — the timestamp binding is checked separately by
+/// [`check_sig_binding`].
+fn run_gpg_verify(sig: &std::path::Path, file: &std::path::Path) -> anyhow::Result<String> {
+    let out = std::process::Command::new("gpg")
+        .args([
+            "--status-fd",
+            "1",
+            "--verify",
+            &sig.to_string_lossy(),
+            &file.to_string_lossy(),
+        ])
+        .output()
+        .map_err(|e| anyhow::anyhow!("Could not run gpg ({e}). Is GnuPG installed?"))?;
+    if !out.status.success() {
+        anyhow::bail!("GPG signature does not verify for this file.");
+    }
+    let status =
+        String::from_utf8_lossy(&out.stderr).into_owned() + &String::from_utf8_lossy(&out.stdout);
+    Ok(parse_gpg_fingerprint(&status))
+}
+
+/// Extract the `VALIDSIG <fingerprint>` field from `gpg --status-fd`
+/// output, falling back to `GOODSIG <keyid>` when only that is present.
+fn parse_gpg_fingerprint(status: &str) -> String {
+    for line in status.lines() {
+        let line = line.trim_start_matches("[GNUPG:]").trim();
+        if let Some(rest) = line.strip_prefix("VALIDSIG") {
+            if let Some(fp) = rest.split_whitespace().next() {
+                return fp.to_string();
+            }
+        }
+    }
+    for line in status.lines() {
+        let line = line.trim_start_matches("[GNUPG:]").trim();
+        if let Some(rest) = line.strip_prefix("GOODSIG") {
+            if let Some(id) = rest.split_whitespace().next() {
+                return id.to_string();
+            }
+        }
+    }
+    "unknown (gpg said valid, fingerprint not parsed)".to_string()
+}
+
+/// Require the signature's own proof (`file.sig.xmrts`) to anchor in the
+/// same transaction as the file proof. `stamp --sign-with` stamps the `.sig`
+/// files in the same batch, so both proofs share `root` and `txid`.
+/// Returns an error explaining which side is missing or split.
+fn check_sig_binding(
+    proof: &Proof,
+    sig: &std::path::Path,
+    sig_proof_opt: Option<&std::path::Path>,
+    main_proof_path: &std::path::Path,
+) -> anyhow::Result<()> {
+    let sig_proof_path = resolve_sig_proof_path(sig, sig_proof_opt, main_proof_path)?;
+    let raw = std::fs::read(&sig_proof_path).map_err(|_| {
+        anyhow::anyhow!(
+            "Signature proof missing: {} holds no anchored proof for the .sig.\nStamp with `xmrts stamp --sign-with <key>` so the signature joins the same batch, or pass --sig-proof <path> when proofs live elsewhere (e.g. --out-dir).",
+            sig_proof_path.display()
+        )
+    })?;
+    let sig_proof = Proof::from_bytes(&raw).map_err(|e| {
+        anyhow::anyhow!(
+            "Signature proof {} is broken: {e}",
+            sig_proof_path.display()
+        )
+    })?;
+    let sig_hash = crate::protocol::hash::hash_file(sig)
+        .map_err(|e| anyhow::anyhow!("Reading {}: {e:#}", sig.display()))?;
+    if sig_hash != sig_proof.file_hash {
+        anyhow::bail!(
+            "Signature file {} differs from what {} holds. It was replaced after stamping.",
+            sig.display(),
+            sig_proof_path.display()
+        );
+    }
+    sig_proof.verify_merkle_path().map_err(|e| {
+        anyhow::anyhow!(
+            "Signature proof {} tree path misses the root: {e}",
+            sig_proof_path.display()
+        )
+    })?;
+    if sig_proof.is_pending() {
+        anyhow::bail!(
+            "Signature proof {} is pending (no block yet). Run `xmrts finalize` first.",
+            sig_proof_path.display()
+        );
+    }
+    if sig_proof.root != proof.root || sig_proof.txid != proof.txid {
+        anyhow::bail!(
+            "Signature is valid but NOT bound to this timestamp: file tx {} vs sig tx {}.\nA signature made later still verifies with gpg; only the same-transaction proof binds authorship to this block.",
+            hex::encode(proof.txid),
+            hex::encode(sig_proof.txid)
+        );
+    }
+    Ok(())
+}
+
+/// Locate the `.sig` proof: explicit `--sig-proof`, else `<sig>.xmrts` next
+/// to the signature, else the same file name inside the main proof's
+/// directory (covers `stamp --out-dir`).
+fn resolve_sig_proof_path(
+    sig: &std::path::Path,
+    explicit: Option<&std::path::Path>,
+    main_proof: &std::path::Path,
+) -> anyhow::Result<std::path::PathBuf> {
+    use std::path::PathBuf;
+    if let Some(p) = explicit {
+        return Ok(p.to_path_buf());
+    }
+    let next_to_sig = PathBuf::from(format!("{}.xmrts", sig.display()));
+    if next_to_sig.exists() {
+        return Ok(next_to_sig);
+    }
+    if let (Some(parent), Some(name)) = (main_proof.parent(), sig.file_name()) {
+        let cand = parent.join(format!("{}.xmrts", name.to_string_lossy()));
+        if cand.exists() {
+            return Ok(cand);
+        }
+        // Return the next-to-sig candidate for a clear "missing" error that
+        // names where the user should look first.
+        let _ = cand;
+    }
+    Ok(next_to_sig)
+}
+
+/// Normalize a daemon URL to `host[:port]` for quorum distinctness.
+/// Lowercased, scheme/userinfo/path stripped. Two spellings of the same
+/// host (`http://node:18081` vs `http://node:18081/json_rpc`) compare equal.
+fn daemon_identity(daemon: &str) -> String {
+    let rest = daemon
+        .strip_prefix("https://")
+        .or_else(|| daemon.strip_prefix("http://"))
+        .unwrap_or(daemon);
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or(rest);
+    let host_port = authority.rsplit('@').next().unwrap_or(authority);
+    host_port.to_ascii_lowercase()
+}
+
+/// Refuse a quorum whose entries resolve to the same host:port twice.
+/// Pass `--daemon` once, or point at genuinely independent nodes.
+fn check_daemons_distinct(daemons: &[String]) -> anyhow::Result<()> {
+    let mut seen = std::collections::HashSet::new();
+    for d in daemons {
+        let id = daemon_identity(d);
+        if !seen.insert(id.clone()) {
+            anyhow::bail!(
+                "Quorum needs distinct daemons: '{d}' repeats '{id}'. One --daemon, or independent nodes."
+            );
+        }
+    }
+    Ok(())
 }
 
 fn print_json(v: &serde_json::Value) {
@@ -365,6 +558,9 @@ pub(crate) async fn blockchain_check(
     } else {
         daemon_overrides.to_vec()
     };
+    // A quorum of one host is no quorum: the same daemon twice (or the same
+    // host under two spellings) would always "agree" with itself.
+    check_daemons_distinct(&daemons)?;
     // Quorum: every daemon is checked independently and all must agree
     // on (height, block hash). Tips may legitimately differ by a block
     // between honest daemons, so confirmations are NOT compared: the
@@ -474,6 +670,31 @@ mod tests {
     }
 
     #[test]
+    fn quorum_rejects_repeated_daemons() {
+        let same = vec![
+            "http://node:18081".to_string(),
+            "http://node:18081/json_rpc".to_string(),
+        ];
+        assert!(check_daemons_distinct(&same).is_err());
+        let case = vec![
+            "http://node:18081".to_string(),
+            "http://NODE:18081".to_string(),
+        ];
+        assert!(check_daemons_distinct(&case).is_err());
+        assert!(check_daemons_distinct(&daemons()).is_ok());
+        assert!(check_daemons_distinct(&daemons()[..1]).is_ok());
+    }
+
+    #[test]
+    fn gpg_fingerprint_parses_status_fd() {
+        let s = "[GNUPG:] VALIDSIG ABCDEF1234567890 2024-01-01 1234\n[GNUPG:] GOODSIG 1234 user <u@x>\n";
+        assert_eq!(parse_gpg_fingerprint(s), "ABCDEF1234567890");
+        let s = "[GNUPG:] GOODSIG DEADBEEF some user\n";
+        assert_eq!(parse_gpg_fingerprint(s), "DEADBEEF");
+        assert!(parse_gpg_fingerprint("nothing here").contains("unknown"));
+    }
+
+    #[test]
     fn anchored_json_shape_is_stable() {
         let proof = anchored_proof();
         let anchor = anchor_at(3_000_090, 0xab, 12);
@@ -486,6 +707,7 @@ mod tests {
             10,
             true,
             &daemons(),
+            None,
         );
         // Booleans.
         assert_eq!(v["ok"], true);
@@ -524,6 +746,7 @@ mod tests {
             10,
             false,
             &daemons()[..1],
+            None,
         );
         assert_eq!(v["ok"], true);
         assert_eq!(v["anchored"], true);

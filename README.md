@@ -96,7 +96,10 @@ its proof (block height + hash + timestamp). It does **not** prove
 authorship, creation time, or anything before that block. For authorship,
 sign first: `xmrts stamp --sign-with <gpg-key> file` anchors a detached
 GPG signature in the same batch, and `xmrts verify file file.xmrts --sig
-file.sig` checks both.
+file.sig` checks both — gpg verifies the signature (fingerprint printed),
+and `file.sig.xmrts` must anchor in the SAME transaction as the file proof
+(a later signature still passes gpg, but fails the binding without it).
+Proofs living away from the files (e.g. `--out-dir`) pass `--sig-proof`.
 
 ## Verifying releases
 

@@ -10,7 +10,7 @@ inputs:
     description: "Space-separated list of files (or globs) to timestamp"
     required: true
   version:
-    description: "xmrts release to install (e.g. 0.1.3). Defaults to latest."
+    description: "xmrts release to install (e.g. 0.3.0). Defaults to latest."
     required: false
     default: ""
   network:
@@ -22,9 +22,17 @@ inputs:
     required: false
     default: ""
   wallet-endpoint:
-    description: "monero-wallet-rpc endpoint, e.g. http://127.0.0.1:18082"
+    description: "Reachable monero-wallet-rpc endpoint with an open timestamping wallet, e.g. http://wallet:18082. A hosted runner has no local wallet; point at a reachable one (service container or remote). Empty means the saved/default endpoint."
     required: false
-    default: "http://127.0.0.1:18082"
+    default: ""
+  wallet-username:
+    description: "RPC username when the wallet uses --rpc-login (else empty)"
+    required: false
+    default: ""
+  wallet-password:
+    description: "RPC password when the wallet uses --rpc-login (store in secrets)"
+    required: false
+    default: ""
   max-fee:
     description: "Refuse to send when the quoted fee exceeds this many atomic units"
     required: false
@@ -66,7 +74,24 @@ runs:
           url="$base/xmrts-linux-x86_64.tar.gz"
         fi
         curl -fsSL "$url" -o /tmp/xmrts.tar.gz
+        # Authenticity: verify the build-provenance attestation before
+        # executing anything. Fails closed when gh is present; warns when
+        # gh is unavailable (e.g. non-GitHub runners).
+        repo="${{ github.action_repository }}"
+        owner="${repo%%/*}"
+        if command -v gh >/dev/null 2>&1; then
+          gh attestation verify /tmp/xmrts.tar.gz --owner "$owner"
+        else
+          echo "::warning::gh CLI missing: skipping attestation check for xmrts tarball"
+        fi
         mkdir -p "$RUNNER_TOOL_CACHE/xmrts" && tar -xzf /tmp/xmrts.tar.gz -C "$RUNNER_TOOL_CACHE/xmrts"
+        # Integrity: the archive ships SHA256SUMS inside; every extracted
+        # file must match before the binary is trusted.
+        if [ -f "$RUNNER_TOOL_CACHE/xmrts/SHA256SUMS" ]; then
+          (cd "$RUNNER_TOOL_CACHE/xmrts" && shasum -a 256 -c SHA256SUMS)
+        else
+          echo "::warning::SHA256SUMS missing from xmrts archive: integrity check skipped"
+        fi
         echo "$RUNNER_TOOL_CACHE/xmrts" >> "$GITHUB_PATH"
 
     - name: Stamp files
@@ -77,6 +102,8 @@ runs:
         XMTS_NETWORK: ${{ inputs.network }}
         XMTS_DAEMON: ${{ inputs.daemon }}
         XMTS_ENDPOINT: ${{ inputs.wallet-endpoint }}
+        XMTS_RPC_USER: ${{ inputs.wallet-username }}
+        XMTS_RPC_PASS: ${{ inputs.wallet-password }}
         XMTS_MAX_FEE: ${{ inputs.max-fee }}
         XMTS_NO_WAIT: ${{ inputs.no-wait }}
         XMTS_OUT_DIR: ${{ inputs.out-dir }}
@@ -84,6 +111,23 @@ runs:
         set -euo pipefail
         # Never stamp with a savings wallet: use a dedicated low-value
         # timestamping wallet and a --max-fee cap (see inputs).
+        # Point xmrts at the reachable wallet/daemon first: `stamp` reads
+        # its endpoint and RPC login from the saved config.
+        if [ -n "$XMTS_ENDPOINT" ]; then
+          xmrts connect --endpoint "$XMTS_ENDPOINT"
+        fi
+        if [ -n "$XMTS_DAEMON" ]; then
+          xmrts connect --daemon "$XMTS_DAEMON"
+        fi
+        if [ -n "$XMTS_RPC_USER" ]; then
+          if [ -z "$XMTS_RPC_PASS" ]; then
+            echo "::error::wallet-username needs wallet-password too" >&2
+            exit 1
+          fi
+          # Password via env is still visible in ps while connect runs;
+          # prefer IP-allowlisted wallets without login when possible.
+          xmrts connect --username "$XMTS_RPC_USER" --password "$XMTS_RPC_PASS" --save-auth
+        fi
         args=(--json --yes)
         if [ "$XMTS_NO_WAIT" = "true" ]; then args+=(--no-wait); fi
         if [ -n "$XMTS_DAEMON" ]; then args+=(--daemon "$XMTS_DAEMON"); fi

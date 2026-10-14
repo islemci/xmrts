@@ -2,24 +2,34 @@
 #
 # Prereqs:
 # - a dedicated low-value Monero timestamping wallet (NEVER savings),
-#   open in a monero-wallet-rpc reachable from the runner;
-# - RPC login stored as Actions secrets when the wallet uses --rpc-login;
+#   open in a monero-wallet-rpc REACHABLE from the runner (a hosted runner
+#   has no local wallet: use a service container, a sidecar host, or a
+#   trusted remote wallet). Store its endpoint + RPC login as secrets;
 # - a daemon address (local node or trusted remote).
 #
-# Flow: stamp with --no-wait on release, then a scheduled job runs
-# `finalize --all` until the proofs anchor.
+# Flow: stamp with --no-wait on release (pending .xmrts proofs keep their
+# txid/root), then a scheduled job upgrades the proof files themselves with
+# `finalize <proof>` until they anchor. No pending-record handoff needed:
+# each .xmrts carries what finalize needs.
 
 name: timestamp-release
 
 on:
   release:
     types: [published]
+  # Every 30 min until anchored; each run upgrades what it can and exits.
+  schedule:
+    - cron: "*/30 * * * *"
+  workflow_dispatch:
 
 permissions:
   contents: read
+  attestations: read
 
 jobs:
   stamp:
+    # Only stamp on releases; scheduled runs only finalize.
+    if: github.event_name == 'release'
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
@@ -34,9 +44,11 @@ jobs:
         uses: islemci/xmrts@v1
         with:
           files: "dist/SHA256SUMS"
-          version: "0.1.3"
+          version: "0.3.0"
           daemon: ${{ secrets.XMRTS_DAEMON }}
-          wallet-endpoint: "http://127.0.0.1:18082"
+          wallet-endpoint: ${{ secrets.XMRTS_WALLET_ENDPOINT }}
+          wallet-username: ${{ secrets.XMRTS_WALLET_USER }}
+          wallet-password: ${{ secrets.XMRTS_WALLET_PASS }}
           max-fee: "100000"
           no-wait: "true"
           out-dir: "dist"
@@ -49,21 +61,38 @@ jobs:
 
   finalize:
     runs-on: ubuntu-22.04
-    # Every 30 min until anchored; `finalize --all` exits 0 once empty.
-    if: always()
-    needs: stamp
+    # Scheduled runs have no `stamp` to need; release runs wait for it.
+    if: always() && (github.event_name != 'release' || needs.stamp.result == 'success')
+    needs: [stamp]
     steps:
       - uses: actions/checkout@v4
-      - name: Install xmrts
+      - name: Install xmrts (verified)
+        env:
+          XMTS_VERSION: "0.3.0"
         run: |
-          curl -fsSL https://github.com/islemci/xmrts/releases/download/v0.1.3/xmrts-linux-x86_64.tar.gz \
-            -o /tmp/xmrts.tar.gz
+          set -euo pipefail
+          base="https://github.com/islemci/xmrts/releases/download/v$XMTS_VERSION"
+          curl -fsSL "$base/xmrts-linux-x86_64.tar.gz" -o /tmp/xmrts.tar.gz
+          gh attestation verify /tmp/xmrts.tar.gz --owner islemci
           mkdir -p ~/.local/bin && tar -xzf /tmp/xmrts.tar.gz -C ~/.local/bin
+          (cd ~/.local/bin && [ -f SHA256SUMS ] && shasum -a 256 -c SHA256SUMS)
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
       - uses: actions/download-artifact@v4
         with:
           name: timestamp-proofs
           path: dist
+      # Proof-only finalize: each pending .xmrts holds its own txid/root,
+      # so no pending-record artifact and no original files are needed.
       - name: Finish pending stamps
-        run: xmrts finalize --all --daemon "${{ secrets.XMRTS_DAEMON }}"
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          proofs=(dist/*.xmrts)
+          if [ "${#proofs[@]}" -eq 0 ]; then
+            echo "No proofs to finalize."
+            exit 0
+          fi
+          for p in "${proofs[@]}"; do
+            xmrts finalize "$p" --daemon "${{ secrets.XMRTS_DAEMON }}" || echo "::warning::still pending: $p"
+          done
         timeout-minutes: 25

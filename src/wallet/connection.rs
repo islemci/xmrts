@@ -57,6 +57,11 @@ pub struct WalletConfig {
     /// Old configs predate the field and default to true.
     #[serde(default = "default_autoclose")]
     pub autoclose: bool,
+    /// On-chain commitment encoding: `bare` (default, random-looking
+    /// 32-byte nonce) or `magic` (legacy XMRTS-tagged payload for
+    /// tooling that scans for it). Readers accept both either way.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub commitment: Option<String>,
     /// 3-letter fiat currency for estimates (`setting set currency eur`).
     /// Defaults to USD when unset.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -85,6 +90,7 @@ impl Default for WalletConfig {
             currency: None,
             proxy: None,
             autoclose: default_autoclose(),
+            commitment: None,
         }
     }
 }
@@ -117,6 +123,13 @@ impl WalletConfig {
             if !is_valid_proxy(p) {
                 return Err(ConnectionError::Config(format!(
                     "bad proxy '{p}': want socks5h://, socks5://, http:// or https:// URL"
+                )));
+            }
+        }
+        if let Some(c) = &self.commitment {
+            if c != "bare" && c != "magic" {
+                return Err(ConnectionError::Config(format!(
+                    "bad commitment '{c}': want bare or magic"
                 )));
             }
         }

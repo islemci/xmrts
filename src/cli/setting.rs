@@ -30,8 +30,8 @@ pub enum SettingCommand {
     List,
     /// Show one setting.
     Get {
-        /// Name: price, currency, endpoint, daemon, network,
-        /// wallet-dir, wallet-rpc-path, username, proxy
+        /// Name: price, autoclose, currency, endpoint, daemon, network,
+        /// wallet-dir, wallet-rpc-path, username, proxy, commitment
         key: String,
     },
     /// Change one setting.
@@ -43,7 +43,7 @@ pub enum SettingCommand {
     },
     /// Clear an optional setting.
     Unset {
-        /// Name: currency, daemon, wallet-dir, wallet-rpc-path, username, proxy
+        /// Name: currency, daemon, wallet-dir, wallet-rpc-path, username, proxy, commitment
         key: String,
     },
 }
@@ -72,6 +72,7 @@ fn describe(cfg: &WalletConfig, key: &str) -> Result<String> {
             .clone()
             .unwrap_or_else(|| "(empty)".to_string()),
         "proxy" => cfg.proxy.clone().unwrap_or_else(|| "(empty)".to_string()),
+        "commitment" => cfg.commitment.clone().unwrap_or_else(|| "bare".to_string()),
         "password" => "(hidden)".to_string(),
         _ => anyhow::bail!("Unknown setting '{key}'. Try `xmrts setting list`"),
     })
@@ -122,6 +123,12 @@ fn apply_set(cfg: &mut WalletConfig, key: &str, value: &str) -> Result<()> {
             }
             cfg.proxy = Some(value.to_string());
         }
+        "commitment" => {
+            if value != "bare" && value != "magic" {
+                anyhow::bail!("Commitment wants bare or magic. Got '{value}'");
+            }
+            cfg.commitment = Some(value.to_string());
+        }
         "password" => anyhow::bail!(
             "Use connect for passwords.\nRun `xmrts connect --username YOU --save-auth` and type it when asked"
         ),
@@ -141,6 +148,7 @@ fn apply_unset(cfg: &mut WalletConfig, key: &str) -> Result<()> {
             cfg.password = None;
         }
         "proxy" => cfg.proxy = None,
+        "commitment" => cfg.commitment = None,
         "price" | "endpoint" | "network" | "autoclose" => {
             anyhow::bail!("'{key}' must stay set. Cannot clear it")
         }
@@ -167,6 +175,7 @@ pub fn run(args: &SettingArgs) -> Result<()> {
                 "username",
                 "password",
                 "proxy",
+                "commitment",
             ] {
                 super::ui::field(key, &describe(&cfg, key)?);
             }
@@ -214,5 +223,9 @@ mod tests {
         assert!(apply_set(&mut cfg, "autoclose", "maybe").is_err());
         apply_set(&mut cfg, "autoclose", "false").unwrap();
         assert!(!cfg.autoclose);
+        assert!(apply_set(&mut cfg, "commitment", "rot13").is_err());
+        apply_set(&mut cfg, "commitment", "magic").unwrap();
+        assert_eq!(cfg.commitment.as_deref(), Some("magic"));
+        assert_eq!(describe(&cfg, "commitment").unwrap(), "magic");
     }
 }

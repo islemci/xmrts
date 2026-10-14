@@ -1,9 +1,19 @@
 //! xmrts commitment in Monero `tx_extra` (spec §4).
 //!
-//! Nonce payload (40 bytes):
-//! `XMRTS || version || hash_algo || merkle_ver || root`.
-//! Full field: `0x02 || 0x28 || payload` (42 bytes), passed to
-//! `monero-wallet-rpc transfer` via its `extra` hex parameter.
+//! Two encodings, both accepted when reading:
+//!
+//! - Legacy (magic): 40-byte nonce payload
+//!   `XMRTS || version || hash_algo || merkle_ver || root`.
+//!   Full field: `0x02 || 0x28 || payload` (42 bytes).
+//! - Bare (V3, default since 0.3.0): the 32-byte size-bound commitment
+//!   alone as a standard nonce field, `0x02 || 0x20 || root` (34 bytes).
+//!   Byte-for-byte indistinguishable from random nonce data; the version
+//!   is implicit (SHA-256, size-bound root, Merkle-V2 semantics).
+//!
+//! Readers start from a known txid (from the proof) and compare against
+//! an expected 32-byte value, so no magic is needed for discovery.
+//! Both forms are passed to `monero-wallet-rpc transfer` via its `extra`
+//! hex parameter.
 
 use crate::protocol::hash::HASH_SHA256;
 use crate::protocol::merkle::{MERKLE_V1, MERKLE_V2};
@@ -17,6 +27,10 @@ pub const PROTOCOL_VERSION: u8 = 0x01;
 pub const NONCE_PAYLOAD_LEN: usize = 40;
 /// Length of the full tx_extra field (tag + len varint + payload).
 pub const TX_EXTRA_FIELD_LEN: usize = 42;
+/// Length of the bare V3 nonce body: the commitment alone, no magic.
+pub const BARE_PAYLOAD_LEN: usize = 32;
+/// Length of the full bare tx_extra field (tag + len varint + 32 bytes).
+pub const BARE_FIELD_LEN: usize = 34;
 
 const TAG_NONCE: u8 = 0x02;
 const TAG_ADDITIONAL_PUBKEYS: u8 = 0x04;
@@ -72,6 +86,18 @@ pub fn build_tx_extra_hex_for(root: &[u8; 32], merkle_ver: u8) -> String {
     field.push(TAG_NONCE);
     field.push(NONCE_PAYLOAD_LEN as u8); // 40 < 128: single-byte varint
     field.extend_from_slice(&payload);
+    hex::encode(field)
+}
+
+/// Build the bare 34-byte tx_extra field for a commitment: `0x02 || 0x20`
+/// plus the 32-byte value, hex-encoded for the wallet RPC `extra`
+/// parameter. No magic, no version bytes: on chain it is
+/// indistinguishable from random nonce data.
+pub fn build_bare_tx_extra_hex(commitment: &[u8; 32]) -> String {
+    let mut field = Vec::with_capacity(BARE_FIELD_LEN);
+    field.push(TAG_NONCE);
+    field.push(BARE_PAYLOAD_LEN as u8); // 32 < 128: single-byte varint
+    field.extend_from_slice(commitment);
     hex::encode(field)
 }
 
@@ -199,6 +225,21 @@ pub fn find_commitments(tx_extra: &[u8]) -> Result<Vec<Commitment>, CommitmentEr
                 pos += size;
                 if tag == TAG_NONCE && body.len() == NONCE_PAYLOAD_LEN && body[0..5] == MAGIC {
                     out.push(parse_nonce_payload(body)?);
+                } else if tag == TAG_NONCE && body.len() == BARE_PAYLOAD_LEN {
+                    // Bare V3 commitment: the 32-byte size-bound root with
+                    // no magic. Implicitly SHA-256 + Merkle-V2 semantics,
+                    // so it carries that version for downstream gates.
+                    // Only meaningful matched against an expected value
+                    // (callers compare `root`); a random 32-byte nonce
+                    // matching a real root needs a hash preimage.
+                    let mut root = [0u8; 32];
+                    root.copy_from_slice(body);
+                    out.push(Commitment {
+                        version: PROTOCOL_VERSION,
+                        hash_algo: HASH_SHA256,
+                        merkle_ver: MERKLE_V2,
+                        root,
+                    });
                 }
             }
         }
@@ -294,5 +335,38 @@ mod tests {
         assert_eq!(found[0].root, root);
         // With nothing found, the same garbage must still error.
         assert!(find_commitments(&[0x01, 0x02]).is_err());
+    }
+
+    #[test]
+    fn bare_commitment_has_no_magic() {
+        let commitment = [0xABu8; 32];
+        let hex_extra = build_bare_tx_extra_hex(&commitment);
+        assert_eq!(hex_extra.len(), 68); // 34 bytes
+        assert!(hex_extra.starts_with("0220"));
+        assert!(!hex_extra.contains("584d525453")); // no "XMRTS"
+    }
+
+    #[test]
+    fn bare_commitment_round_trip_as_v2() {
+        let commitment = [0x55u8; 32];
+        let mut extra = vec![0x01];
+        extra.extend_from_slice(&[0x99u8; 32]); // tx pubkey
+                                                // Wallet-added payment-id nonce must not confuse the scan.
+        extra.extend_from_slice(&[0x02, 0x09, 0x00, 1, 2, 3, 4, 5, 6, 7, 8]);
+        extra.extend_from_slice(&hex::decode(build_bare_tx_extra_hex(&commitment)).unwrap());
+        let found = find_commitments(&extra).unwrap();
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].root, commitment);
+        // Bare carries implicit V2 semantics for downstream version gates.
+        assert_eq!(found[0].merkle_ver, MERKLE_V2);
+    }
+
+    #[test]
+    fn random_32byte_nonce_matches_only_itself() {
+        // A bare nonce is only meaningful compared against an expected
+        // value: unrelated 32-byte nonces parse but never equal another root.
+        let extra = hex::decode(build_bare_tx_extra_hex(&[0x11u8; 32])).unwrap();
+        assert!(find_commitment_for_root(&extra, &[0x22u8; 32]).is_err());
+        assert!(find_commitment_for_root(&extra, &[0x11u8; 32]).is_ok());
     }
 }

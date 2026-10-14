@@ -518,3 +518,47 @@ async fn block_header_returns_hash_and_timestamp() {
     assert_eq!(hash, block_hash);
     assert_eq!(ts, 1760000000u64);
 }
+
+#[tokio::test]
+async fn bare_commitment_verifies_with_v2_gate() {
+    // V3 style: no magic on chain, just the 32-byte size-bound root as a
+    // standard nonce. The version gate treats it as V2 semantics.
+    use xmrts::protocol::{commitment, merkle};
+    let top_root = [0x77u8; 32];
+    let commit = merkle::commit_root(&top_root, 3);
+    let txid_hex = hex::encode([0x5au8; 32]);
+    let block_hash = [0xabu8; 32];
+    let extra = commitment::build_bare_tx_extra_hex(&commit);
+    assert!(!extra.contains("584d525453"), "bare must carry no magic");
+    let state = Arc::new(Mutex::new({
+        let mut s = MockState::new("mainnet", 2_000_110);
+        s.txs.insert(txid_hex.clone(), (extra, 2_000_100));
+        s.headers.insert(2_000_100, hex::encode(block_hash));
+        s
+    }));
+    let endpoint = start_mock(state).await;
+    let anchor = xmrts::wallet::daemon::verify_anchor_for_version(
+        &endpoint,
+        &txid_hex,
+        &commit,
+        Some(merkle::MERKLE_V2),
+        2_000_100,
+        &block_hash,
+        "mainnet",
+    )
+    .await
+    .expect("bare anchor must verify");
+    assert_eq!(anchor.height, 2_000_100);
+    // A V1 version gate must NOT match the bare (implicit-V2) encoding.
+    let r = xmrts::wallet::daemon::verify_anchor_for_version(
+        &endpoint,
+        &txid_hex,
+        &commit,
+        Some(merkle::MERKLE_V1),
+        2_000_100,
+        &block_hash,
+        "mainnet",
+    )
+    .await;
+    assert!(r.is_err(), "V1 gate must reject bare encoding, got {r:?}");
+}

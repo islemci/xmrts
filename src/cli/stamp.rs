@@ -204,12 +204,6 @@ pub async fn run_inner(args: &StampArgs, verbose: bool, stagenet: bool) -> Resul
     super::ui::field("Files", &format!("{}", hashes.len()));
     super::ui::field("Root", &hex::encode(root));
 
-    let extra_hex =
-        commitment::build_tx_extra_hex_for(&commitment, crate::protocol::merkle::MERKLE_V2);
-    if verbose && !args.json {
-        println!("Commitment: {extra_hex}");
-    }
-
     let mut cfg: WalletConfig = connection::load_config();
     if stagenet {
         cfg.network = "stagenet".to_string();
@@ -221,6 +215,19 @@ pub async fn run_inner(args: &StampArgs, verbose: bool, stagenet: bool) -> Resul
         )
     })?;
     let network_name = network.as_str().to_string();
+
+    // Bare 32-byte nonce by default: on chain it is indistinguishable
+    // from random nonce data. `magic` keeps the legacy XMRTS-tagged
+    // encoding for tooling that scans for it.
+    let extra_hex = match cfg.commitment.as_deref().unwrap_or("bare") {
+        "magic" => {
+            commitment::build_tx_extra_hex_for(&commitment, crate::protocol::merkle::MERKLE_V2)
+        }
+        _ => commitment::build_bare_tx_extra_hex(&commitment),
+    };
+    if verbose && !args.json {
+        println!("Commitment: {extra_hex}");
+    }
 
     if args.offline {
         let proofs = write_proofs(

@@ -59,6 +59,14 @@ open yours via `open_wallet` after `wallet start`.
 `stamp --offline` writes pending (unanchored) proofs without a wallet.
 Useful for testing the protocol plumbing. `verify --offline` checks
 cryptography only and clearly reports that anchoring was NOT checked.
+
+## Chain footprint
+
+Since 0.3.0 stamps commit as a bare 32-byte nonce (`02 20 <root>`),
+indistinguishable from random nonce data — the same shape as an ordinary
+self-payment. Readers start from the txid in your proof, so no on-chain
+marker is needed. Older `XMRTS`-tagged stamps keep verifying forever;
+`xmrts setting set commitment magic` restores the legacy encoding.
 ## Install
 
 xmrts can be installed via [Homebrew](https://brew.sh) on both MacOS and Linux devices.

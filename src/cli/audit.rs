@@ -10,6 +10,7 @@
 //! xmrts audit proofs/                      # every .xmrts under proofs/
 //! xmrts audit a.pdf.xmrts b.pdf.xmrts      # named proofs
 //! xmrts audit --daemon http://127.0.0.1:18081 proofs/
+//! xmrts audit --proof-only proofs/         # anchors only, no originals
 //! ```
 
 use anyhow::{Context, Result};
@@ -33,6 +34,12 @@ pub struct AuditArgs {
     /// Machine-readable JSON on stdout (human lines suppressed).
     #[arg(long)]
     pub json: bool,
+    /// Skip the original-file check: verify the Merkle path and chain
+    /// anchor from the proof alone. Fixes `--out-dir` layouts (originals
+    /// not next to proofs) and avoids re-hashing large files just to
+    /// re-check the chain anchor.
+    #[arg(long)]
+    pub proof_only: bool,
 }
 
 struct AuditResult {
@@ -53,9 +60,21 @@ pub async fn run(args: &AuditArgs, verbose: bool, stagenet: bool) -> Result<()> 
         anyhow::bail!("No .xmrts proofs found in the given paths.");
     }
     super::ui::header("◆", "Audit");
+    if args.proof_only {
+        super::ui::note("Proof-only: original files unchecked, anchors only.");
+    }
     let mut results: Vec<AuditResult> = Vec::new();
     for proof_path in &proofs {
-        results.push(audit_one(proof_path, &args.daemon, stagenet, min_conf).await);
+        results.push(
+            audit_one(
+                proof_path,
+                &args.daemon,
+                stagenet,
+                min_conf,
+                args.proof_only,
+            )
+            .await,
+        );
     }
     let failed = results.iter().filter(|r| !r.ok).count();
     if args.json {
@@ -65,6 +84,7 @@ pub async fn run(args: &AuditArgs, verbose: bool, stagenet: bool) -> Result<()> 
                 "ok": failed == 0,
                 "audited": results.len(),
                 "failed": failed,
+                "proof_only": args.proof_only,
                 "results": results.iter().map(|r| serde_json::json!({
                     "proof": r.proof.display().to_string(),
                     "ok": r.ok,
@@ -109,6 +129,7 @@ async fn audit_one(
     daemons: &[String],
     stagenet: bool,
     min_conf: u64,
+    proof_only: bool,
 ) -> AuditResult {
     let fail = |detail: String| AuditResult {
         proof: proof_path.to_path_buf(),
@@ -127,26 +148,33 @@ async fn audit_one(
     if proof.is_pending() {
         return fail("proof is pending: no block yet".to_string());
     }
-    // Sibling original: proof `file.pdf.xmrts` belongs to `file.pdf`.
-    let file_path = match proof_path
-        .to_string_lossy()
-        .strip_suffix(".xmrts")
-        .map(PathBuf::from)
-    {
-        Some(p) => p,
-        None => return fail("proof file name must end in .xmrts".to_string()),
-    };
-    let file_hash = match hash::hash_file(&file_path) {
-        Ok(h) => h,
-        Err(e) => {
-            return fail(format!(
-                "cannot read original file {}: {e:#}",
-                file_path.display()
-            ));
+    // Full mode: the sibling original (`file.pdf` for `file.pdf.xmrts`)
+    // must still hash to the proof's file_hash. Proof-only mode skips this
+    // (originals may live elsewhere with `--out-dir`, or re-hashing
+    // multi-gigabyte files just to re-check the anchor is wasteful): the
+    // Merkle path is still checked for internal consistency and the chain
+    // anchor is fully verified.
+    if !proof_only {
+        let file_path = match proof_path
+            .to_string_lossy()
+            .strip_suffix(".xmrts")
+            .map(PathBuf::from)
+        {
+            Some(p) => p,
+            None => return fail("proof file name must end in .xmrts".to_string()),
+        };
+        let file_hash = match hash::hash_file(&file_path) {
+            Ok(h) => h,
+            Err(e) => {
+                return fail(format!(
+                    "cannot read original file {}: {e:#}",
+                    file_path.display()
+                ));
+            }
+        };
+        if file_hash != proof.file_hash {
+            return fail("file differs from what the proof holds".to_string());
         }
-    };
-    if file_hash != proof.file_hash {
-        return fail("file differs from what the proof holds".to_string());
     }
     if let Err(e) = proof.verify_merkle_path() {
         return fail(format!("tree path misses the root: {e}"));

@@ -7,8 +7,11 @@
 //!   Full field: `0x02 || 0x28 || payload` (42 bytes).
 //! - Bare (V3, default since 0.3.0): the 32-byte size-bound commitment
 //!   alone as a standard nonce field, `0x02 || 0x20 || root` (34 bytes).
-//!   Byte-for-byte indistinguishable from random nonce data; the version
-//!   is implicit (SHA-256, size-bound root, Merkle-V2 semantics).
+//!   The bytes look like a random 32-byte nonce (much better than the
+//!   `XMRTS` magic, which is trivially enumerable), but a 32-byte nonce
+//!   body is unusual on chain — normal nonces are 9 or 33 bytes — so it is
+//!   fingerprintable by size. Do not rely on it for anonymity.
+//!   The version is implicit (SHA-256, size-bound root, Merkle-V2 semantics).
 //!
 //! Readers start from a known txid (from the proof) and compare against
 //! an expected 32-byte value, so no magic is needed for discovery.
@@ -91,8 +94,9 @@ pub fn build_tx_extra_hex_for(root: &[u8; 32], merkle_ver: u8) -> String {
 
 /// Build the bare 34-byte tx_extra field for a commitment: `0x02 || 0x20`
 /// plus the 32-byte value, hex-encoded for the wallet RPC `extra`
-/// parameter. No magic, no version bytes: on chain it is
-/// indistinguishable from random nonce data.
+/// parameter. No magic, no version bytes: the bytes look like a random
+/// 32-byte nonce, but the 32-byte size itself is unusual on chain (normal
+/// nonces are 9 or 33 bytes), so it is not anonymous, only unlabelled.
 pub fn build_bare_tx_extra_hex(commitment: &[u8; 32]) -> String {
     let mut field = Vec::with_capacity(BARE_FIELD_LEN);
     field.push(TAG_NONCE);

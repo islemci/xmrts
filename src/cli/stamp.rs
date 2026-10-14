@@ -225,9 +225,11 @@ pub async fn run_inner(args: &StampArgs, verbose: bool, stagenet: bool) -> Resul
     })?;
     let network_name = network.as_str().to_string();
 
-    // Bare 32-byte nonce by default: on chain it is indistinguishable
-    // from random nonce data. `magic` keeps the legacy XMRTS-tagged
-    // encoding for tooling that scans for it.
+    // Bare 32-byte nonce by default: the bytes look random (better than
+    // the enumerable `XMRTS` magic), but the 32-byte size is unusual on
+    // chain (normal nonces are 9 or 33 bytes), so it is not anonymous.
+    // `magic` keeps the legacy XMRTS-tagged encoding for tooling that
+    // scans for it.
     let extra_hex = match cfg.commitment.as_deref().unwrap_or("bare") {
         "magic" => {
             commitment::build_tx_extra_hex_for(&commitment, crate::protocol::merkle::MERKLE_V2)

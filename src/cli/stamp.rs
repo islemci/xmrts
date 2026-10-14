@@ -852,13 +852,20 @@ pub(crate) fn write_proofs(
         let siblings = tree
             .proof_for(leaf_index)
             .map_err(|e| anyhow::anyhow!("Tree failed: {e}"))?;
+        // Pending proofs keep the txid when known (e.g. `--no-wait` after
+        // relay): `is_pending()` keys on `block_height == 0`, so the txid
+        // survives and `finalize` can upgrade the proof file itself without
+        // the pending record. Offline proofs keep zeros (no tx yet).
         let proof = if height == 0 {
-            Proof::new_pending(
+            Proof::new(
                 *network,
                 *h,
                 leaf_index,
                 tree.tree_size(),
                 tree.root(),
+                *txid,
+                0,
+                [0u8; 32],
                 siblings,
             )
         } else {

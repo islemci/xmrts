@@ -14,7 +14,10 @@ use crate::wallet::connection;
 
 #[derive(Debug, Args)]
 pub struct FinalizeArgs {
-    /// Pending file to finish (picks the only one when empty).
+    /// Pending record (.json) or pending proof (.xmrts) to finish (picks the
+    /// only pending record when empty). A `.xmrts` path upgrades the proof
+    /// file itself from its embedded txid/root: no pending record or
+    /// original file needed, so CI runners can finalize from artifacts alone.
     pub pending: Option<PathBuf>,
     /// Daemon address for chain checks.
     #[arg(long)]
@@ -83,6 +86,14 @@ pub(crate) async fn finalize_one(
     stagenet: bool,
     min_conf: u64,
 ) -> Result<()> {
+    // Proof-only path: a pending `.xmrts` carries its own txid + root, so a
+    // fresh runner (e.g. CI finalize job) can upgrade it with only a daemon.
+    if pending_path
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("xmrts"))
+    {
+        return finalize_proof_file(pending_path, daemon_opt, stagenet, min_conf).await;
+    }
     let op = pending::load(pending_path)?;
     if op.txid.is_empty() {
         anyhow::bail!("This pending never sent (no txid). Run `xmrts stamp` again");
@@ -126,7 +137,9 @@ pub(crate) async fn finalize_one(
     )
     .await;
     super::ui::abandon(&bar);
-    let height = height.map_err(|e| anyhow::anyhow!("Not ready yet: {e}"))?;
+    let height = height.map_err(|e| {
+        anyhow::anyhow!("Not ready yet: {e}. A tx that never appears may have been dropped; re-stamp if the wallet no longer shows it.")
+    })?;
     super::ui::ok(&format!("Tx {} sits in block {height}.", op.txid));
     super::ui::ok("Chain holds your mark.");
     // H2: never write zeros. If the hash cannot be fetched, stay pending.
@@ -206,5 +219,95 @@ pub(crate) async fn finalize_one(
         pairs.len()
     ));
     println!("Files lived no later than block {height}.");
+    Ok(())
+}
+
+/// Upgrade one pending `.xmrts` proof file in place using its embedded
+/// txid + root. Needs no pending record and no original file: the proof
+/// already holds file_hash, Merkle path, network, and version. Old pending
+/// proofs with an all-zero txid (written before txids were preserved) cannot
+/// use this path and must finalize via their pending record instead.
+pub(crate) async fn finalize_proof_file(
+    proof_path: &std::path::Path,
+    daemon_opt: Option<&str>,
+    stagenet: bool,
+    min_conf: u64,
+) -> Result<()> {
+    use crate::protocol::proof::Proof;
+    let raw =
+        std::fs::read(proof_path).with_context(|| format!("Reading {}", proof_path.display()))?;
+    let proof = Proof::from_bytes(&raw)
+        .map_err(|e| anyhow::anyhow!("Proof {} is broken: {e}", proof_path.display()))?;
+    if !proof.is_pending() {
+        super::ui::ok(&format!(
+            "{} is already anchored (block {}). Nothing to do.",
+            proof_path.display(),
+            proof.block_height
+        ));
+        return Ok(());
+    }
+    if proof.txid == [0u8; 32] {
+        anyhow::bail!(
+            "Proof {} has no txid (written before txids were preserved in pending proofs). Finish it via its pending record instead.",
+            proof_path.display()
+        );
+    }
+    if stagenet && proof.network != Network::Stagenet {
+        anyhow::bail!("This proof is for {}, not stagenet", proof.network.as_str());
+    }
+    crate::protocol::merkle::check_version(proof.merkle_ver)
+        .map_err(|e| anyhow::anyhow!("Proof holds a bad merkle version: {e}"))?;
+    let cfg = connection::load_config();
+    let daemon = daemon_opt
+        .map(String::from)
+        .or(cfg.daemon_endpoint.clone())
+        .ok_or_else(|| anyhow::anyhow!("No daemon set. Run `xmrts connect --daemon <url>`"))?;
+    if let Some(w) = connection::insecure_daemon_warning(&daemon) {
+        super::ui::warn(&w);
+    }
+    let txid_hex = hex::encode(proof.txid);
+    let commitment = proof.expected_commitment();
+    let bar = super::ui::spinner("Checking chain...");
+    let height = crate::wallet::daemon::confirm_commitment_for_version(
+        &daemon,
+        &txid_hex,
+        &commitment,
+        Some(proof.merkle_ver),
+    )
+    .await;
+    super::ui::abandon(&bar);
+    let height = height.map_err(|e| {
+        anyhow::anyhow!("Not ready yet: {e}. A tx that never appears may have been dropped; re-stamp if the wallet no longer shows it.")
+    })?;
+    let block_hash = crate::wallet::daemon::block_hash(&daemon, height)
+        .await
+        .map_err(|e| anyhow::anyhow!("Block hash missed ({e}). Staying pending; retry later"))?;
+    let (_, tip) = crate::wallet::daemon::get_info(&daemon)
+        .await
+        .map_err(|e| anyhow::anyhow!("Chain tip unknown ({e}). Staying pending; retry later"))?;
+    let confirmations = crate::wallet::daemon::confirmations(tip, height);
+    if confirmations < min_conf {
+        anyhow::bail!(
+            "Only {confirmations} confirmation(s); want {min_conf}+. Staying pending; run `xmrts finalize` later"
+        );
+    }
+    let anchored = Proof::new(
+        proof.network,
+        proof.file_hash,
+        proof.leaf_index,
+        proof.tree_size,
+        proof.root,
+        proof.txid,
+        height,
+        block_hash,
+        proof.siblings.clone(),
+    )
+    .map_err(|e| anyhow::anyhow!("Proof failed: {e}"))?;
+    std::fs::write(proof_path, anchored.to_bytes())
+        .with_context(|| format!("Writing {}", proof_path.display()))?;
+    super::ui::ok(&format!(
+        "Done. {} anchored at block {height}.",
+        proof_path.display()
+    ));
     Ok(())
 }

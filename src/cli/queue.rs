@@ -11,6 +11,11 @@
 //! and refuses when a file changed since it was queued. On success the
 //! flushed entries are removed; `stamp`'s own pending machinery takes over
 //! from there (`finalize`, `watch`).
+//!
+//! Time semantics: the timestamp proves the *flush* time (the block that
+//! anchors the batch), not when files were queued. `added_unix` is your own
+//! local clock for display only (`queue list` ages) — it is never committed
+//! on chain and proves nothing.
 
 use anyhow::{Context, Result};
 use clap::{Args, Subcommand};
@@ -250,9 +255,12 @@ fn run_list(json: bool) -> Result<()> {
         } else {
             " (missing!)"
         };
-        super::ui::field(&e.path, &format!("{} old{}", age_desc(age), missing));
+        super::ui::field(
+            &e.path,
+            &format!("{} old{} (local clock, unproven)", age_desc(age), missing),
+        );
     }
-    super::ui::hint("Stamp them all with `xmrts queue flush --yes`.");
+    super::ui::hint("Stamp them all with `xmrts queue flush --yes`. Ages are local display only: the timestamp will prove flush time, not queue time.");
     Ok(())
 }
 

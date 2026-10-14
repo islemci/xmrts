@@ -29,6 +29,20 @@ pub struct WatchArgs {
     pub min_confirmations: Option<u64>,
 }
 
+/// Age of a pending record in seconds (mtime based, `u64::MAX` when unknown).
+fn pending_age_secs(path: &std::path::Path) -> u64 {
+    std::fs::metadata(path)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| {
+            std::time::SystemTime::now()
+                .duration_since(t)
+                .map(|d| d.as_secs())
+                .ok()
+        })
+        .unwrap_or(u64::MAX)
+}
+
 pub async fn run(args: &WatchArgs, verbose: bool, stagenet: bool) -> Result<()> {
     let _ = verbose;
     let _ = connection::ensure_dirs();
@@ -61,7 +75,17 @@ pub async fn run(args: &WatchArgs, verbose: bool, stagenet: bool) -> Result<()> 
                 Ok(()) => {}
                 Err(e) => {
                     failures += 1;
-                    super::ui::note(&format!("{}: {e:#}", p.display()));
+                    let msg = format!("{e:#}");
+                    super::ui::note(&format!("{}: {msg}", p.display()));
+                    // A stamp that never confirms is usually a dropped tx,
+                    // not a slow block. Records older than a day that the
+                    // daemon never saw are flagged so they don't wait forever.
+                    if msg.contains("dropped") && pending_age_secs(p) > 24 * 3600 {
+                        super::ui::warn(&format!(
+                            "{} is >24h old and still unseen on chain: likely dropped. Re-stamp, then drop the dead record with `xmrts pending clean`.",
+                            p.display()
+                        ));
+                    }
                 }
             }
         }

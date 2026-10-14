@@ -456,7 +456,17 @@ pub async fn run_inner(args: &StampArgs, verbose: bool, stagenet: bool) -> Resul
             // Nothing was broadcast, so the preview txid in the pending
             // record would poison `finalize` forever. Drop the record.
             let _ = std::fs::remove_file(&pending_path);
-            anyhow::anyhow!("Send failed: {e}")
+            let msg = e.to_string();
+            // Relay commits through the wallet's own daemon link. A stale
+            // or unreachable daemon fails the commit even though the
+            // preview built fine.
+            if msg.contains("Failed to commit tx") {
+                anyhow::anyhow!(
+                    "Send failed: {e}\n\nThe wallet could not commit to its daemon. Check `xmrts doctor`: the daemon must be reachable and synced, and the wallet height caught up.\nIf the daemon changed since the helper started, run:\n\n    xmrts wallet stop\n    xmrts wallet start"
+                )
+            } else {
+                anyhow::anyhow!("Send failed: {e}")
+            }
         })?;
         if let Err(e) = pending::update_txid(&pending_path, &h) {
             super::ui::warn(&format!("Relayed but pending record update failed: {e}"));

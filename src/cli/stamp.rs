@@ -462,10 +462,11 @@ pub async fn run_inner(args: &StampArgs, verbose: bool, stagenet: bool) -> Resul
             // preview built fine.
             if msg.contains("Failed to commit tx") {
                 anyhow::anyhow!(
-                    "Send failed: {e}\n\nThe wallet could not commit to its daemon. Check `xmrts doctor`: the daemon must be reachable and synced, and the wallet height caught up.\nIf the daemon changed since the helper started, run:\n\n    xmrts wallet stop\n    xmrts wallet start"
+                    "Send failed: {e}\n\nThe wallet could not commit to its daemon (preview txid was {}). Check `xmrts doctor`: the daemon must be reachable and synced, and the wallet height caught up.\nIf that txid later confirms anyway, wait before re-stamping: a retry spends the same outputs and the daemon rejects it as a double spend until the first tx clears.\nIf the daemon changed since the helper started, run:\n\n    xmrts wallet stop\n    xmrts wallet start",
+                    preview.tx_hash
                 )
             } else {
-                anyhow::anyhow!("Send failed: {e}")
+                anyhow::anyhow!("Send failed: {e} (preview txid was {})", preview.tx_hash)
             }
         })?;
         if let Err(e) = pending::update_txid(&pending_path, &h) {

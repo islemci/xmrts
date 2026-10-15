@@ -172,6 +172,11 @@ pub async fn run_inner(args: &StampArgs, verbose: bool, stagenet: bool) -> Resul
             anyhow::bail!("Same file twice: {}. List each file once.", f.display());
         }
     }
+    // Fail fast when this run could never write its proofs: an input set
+    // colliding with an existing anchored proof must stop BEFORE any wallet
+    // work, i.e. before a fee is spent. (The old guard lived in
+    // `write_proofs`, after relay.)
+    preflight_proof_targets(&inputs, args.out_dir.as_deref())?;
 
     let mut hashes: Vec<([u8; 32], PathBuf)> = Vec::new();
     for f in &inputs {
@@ -898,40 +903,36 @@ pub(crate) fn write_proofs(
         // not swap it for a later proof. The one exception is the
         // pending -> anchored upgrade (`finalize`, or `stamp` after the
         // depth gate): overwriting a pending proof with its anchored
-        // version is the intended finish step.
-        if out.exists() {
-            match std::fs::read(&out) {
-                Ok(raw) => match Proof::from_bytes(&raw) {
-                    Ok(existing) if existing.is_pending() && height != 0 => {
-                        super::ui::note(&format!(
-                            "Upgrading pending proof {} to anchored (block {height}).",
-                            out.display()
-                        ));
-                    }
-                    Ok(existing) if existing.is_pending() => {
-                        anyhow::bail!(
-                            "Proof {} already exists (pending). Remove it or use --out-dir to re-stamp.",
-                            out.display()
-                        );
-                    }
-                    Ok(existing) => {
-                        anyhow::bail!(
-                            "Proof {} already exists and is anchored (block {}). Refusing to replace the earlier timestamp. Remove it or use --out-dir if you really want a later proof.",
-                            out.display(),
-                            existing.block_height
-                        );
-                    }
-                    Err(_) => {
-                        anyhow::bail!(
-                            "File {} already exists and is not a valid proof. Refusing to overwrite.",
-                            out.display()
-                        );
-                    }
-                },
-                Err(e) => {
-                    anyhow::bail!("Proof {} exists but cannot be read: {e}", out.display());
-                }
+        // version is the intended finish step. Anchored/foreign collisions
+        // already bailed in `preflight_proof_targets` before any fee was
+        // spent; this is the backstop (e.g. a file appearing mid-run).
+        match proof_target_status(&out)? {
+            ProofTarget::Pending if height != 0 => {
+                super::ui::note(&format!(
+                    "Upgrading pending proof {} to anchored (block {height}).",
+                    out.display()
+                ));
             }
+            ProofTarget::Pending => {
+                anyhow::bail!(
+                    "Proof {} already exists (pending). Remove it or use --out-dir to re-stamp.",
+                    out.display()
+                );
+            }
+            ProofTarget::Anchored(block_height) => {
+                anyhow::bail!(
+                    "Proof {} already exists and is anchored (block {}). Refusing to replace the earlier timestamp. Remove it or use --out-dir if you really want a later proof.",
+                    out.display(),
+                    block_height
+                );
+            }
+            ProofTarget::Foreign => {
+                anyhow::bail!(
+                    "File {} already exists and is not a valid proof. Refusing to overwrite.",
+                    out.display()
+                );
+            }
+            ProofTarget::Free => {}
         }
         std::fs::write(&out, proof.to_bytes())
             .with_context(|| format!("Writing {}", out.display()))?;
@@ -939,6 +940,78 @@ pub(crate) fn write_proofs(
         written.push(out);
     }
     Ok(written)
+}
+
+/// What already sits at a would-be proof path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ProofTarget {
+    /// Nothing there: safe to write.
+    Free,
+    /// A pending proof: only a run that anchors may replace it.
+    Pending,
+    /// An anchored proof at this block height: never replace implicitly.
+    Anchored(u64),
+    /// Exists but is not a parseable proof: never touch.
+    Foreign,
+}
+
+/// Classify what sits at a would-be proof path. Missing files are `Free`;
+/// existing-but-unreadable files (permissions etc.) are hard errors.
+pub(crate) fn proof_target_status(out: &Path) -> Result<ProofTarget> {
+    let raw = match std::fs::read(out) {
+        Ok(b) => b,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(ProofTarget::Free),
+        Err(e) => {
+            anyhow::bail!("Proof {} exists but cannot be read: {e}", out.display());
+        }
+    };
+    match Proof::from_bytes(&raw) {
+        Ok(p) if p.is_pending() => Ok(ProofTarget::Pending),
+        Ok(p) => Ok(ProofTarget::Anchored(p.block_height)),
+        Err(_) => Ok(ProofTarget::Foreign),
+    }
+}
+
+/// Pre-flight guard: every input must map to a writable proof path BEFORE
+/// any hashing, fee quote, or relay. An anchored (or foreign) collision, or
+/// two inputs sharing one proof path via `--out-dir`, bails here so no fee
+/// is ever spent on a run that could not write its proofs. A pending
+/// collision only warns: a run that anchors upgrades it, otherwise
+/// `write_proofs` still refuses after the fact — prefer `finalize` first.
+fn preflight_proof_targets(inputs: &[PathBuf], out_dir: Option<&Path>) -> Result<()> {
+    let mut seen: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
+    for input in inputs {
+        let out = proof_path_for(input, out_dir)?;
+        if !seen.insert(out.clone()) {
+            anyhow::bail!(
+                "Two inputs map to the same proof file {}. Use separate --out-dir runs.",
+                out.display()
+            );
+        }
+        match proof_target_status(&out)? {
+            ProofTarget::Free => {}
+            ProofTarget::Pending => {
+                super::ui::warn(&format!(
+                    "Proof {} already exists (pending). This run replaces it only if the new tx anchors; otherwise it fails. Prefer `xmrts finalize` first.",
+                    out.display()
+                ));
+            }
+            ProofTarget::Anchored(block_height) => {
+                anyhow::bail!(
+                    "Proof {} already exists and is anchored (block {}). Refusing to replace the earlier timestamp. Remove it or use --out-dir if you really want a later proof.",
+                    out.display(),
+                    block_height
+                );
+            }
+            ProofTarget::Foreign => {
+                anyhow::bail!(
+                    "File {} already exists and is not a valid proof. Refusing to overwrite.",
+                    out.display()
+                );
+            }
+        }
+    }
+    Ok(())
 }
 
 pub(crate) fn proof_path_for(input: &Path, out_dir: Option<&Path>) -> Result<PathBuf> {
@@ -952,5 +1025,99 @@ pub(crate) fn proof_path_for(input: &Path, out_dir: Option<&Path>) -> Result<Pat
             Ok(d.join(file_name))
         }
         None => Ok(PathBuf::from(format!("{}.xmrts", input.display()))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn anchored_proof_bytes() -> Vec<u8> {
+        Proof::new(
+            Network::Mainnet,
+            [0x11u8; 32],
+            0,
+            1,
+            [0x22u8; 32],
+            [0x33u8; 32],
+            3_783_935,
+            [0xabu8; 32],
+            vec![],
+        )
+        .unwrap()
+        .to_bytes()
+    }
+
+    fn pending_proof_bytes() -> Vec<u8> {
+        Proof::new_pending(Network::Mainnet, [0x11u8; 32], 0, 1, [0x22u8; 32], vec![])
+            .unwrap()
+            .to_bytes()
+    }
+
+    #[test]
+    fn preflight_refuses_anchored_before_any_wallet_work() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("LICENSE");
+        std::fs::write(&file, b"license text").unwrap();
+        std::fs::write(dir.path().join("LICENSE.xmrts"), anchored_proof_bytes()).unwrap();
+        let err = preflight_proof_targets(&[file], None).unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(msg.contains("already exists and is anchored"), "{msg}");
+        assert!(msg.contains("3783935"), "{msg}");
+    }
+
+    #[test]
+    fn preflight_refuses_foreign_files_and_intra_run_collisions() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("a.txt");
+        std::fs::write(&file, b"a").unwrap();
+        std::fs::write(dir.path().join("a.txt.xmrts"), b"not a proof").unwrap();
+        let err = preflight_proof_targets(&[file], None).unwrap_err();
+        assert!(format!("{err:#}").contains("not a valid proof"));
+
+        // Two inputs mapping to one proof file via --out-dir.
+        let out = dir.path().join("out");
+        let x = dir.path().join("x");
+        let y = dir.path().join("y");
+        std::fs::create_dir_all(&x).unwrap();
+        std::fs::create_dir_all(&y).unwrap();
+        std::fs::write(x.join("same.txt"), b"x").unwrap();
+        std::fs::write(y.join("same.txt"), b"y").unwrap();
+        let err = preflight_proof_targets(&[x.join("same.txt"), y.join("same.txt")], Some(&out))
+            .unwrap_err();
+        assert!(format!("{err:#}").contains("same proof file"));
+    }
+
+    #[test]
+    fn preflight_passes_free_targets_and_warns_on_pending() {
+        let dir = tempfile::tempdir().unwrap();
+        let fresh = dir.path().join("fresh.txt");
+        std::fs::write(&fresh, b"fresh").unwrap();
+        assert!(preflight_proof_targets(&[fresh], None).is_ok());
+
+        let waiting = dir.path().join("waiting.txt");
+        std::fs::write(&waiting, b"waiting").unwrap();
+        std::fs::write(dir.path().join("waiting.txt.xmrts"), pending_proof_bytes()).unwrap();
+        // Pending only warns (an anchoring run upgrades it), never bails.
+        assert!(preflight_proof_targets(&[waiting], None).is_ok());
+    }
+
+    #[test]
+    fn target_status_classifies_everything_on_disk() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("nope.xmrts");
+        assert_eq!(proof_target_status(&missing).unwrap(), ProofTarget::Free);
+        let anchored = dir.path().join("a.xmrts");
+        std::fs::write(&anchored, anchored_proof_bytes()).unwrap();
+        assert_eq!(
+            proof_target_status(&anchored).unwrap(),
+            ProofTarget::Anchored(3_783_935)
+        );
+        let pending = dir.path().join("p.xmrts");
+        std::fs::write(&pending, pending_proof_bytes()).unwrap();
+        assert_eq!(proof_target_status(&pending).unwrap(), ProofTarget::Pending);
+        let foreign = dir.path().join("f.xmrts");
+        std::fs::write(&foreign, b"junk").unwrap();
+        assert_eq!(proof_target_status(&foreign).unwrap(), ProofTarget::Foreign);
     }
 }

@@ -72,6 +72,50 @@ fn offline_stamp_and_verify_round_trip() {
 }
 
 #[test]
+fn restamp_over_anchored_proof_fails_before_any_wallet_work() {
+    // Regression: the anchored guard used to live in write_proofs, after
+    // relay, so a re-stamp spent a fee and then refused to write. Craft an
+    // anchored proof and stamp --offline (no wallet involved at all): the
+    // pre-flight guard must reject it with the anchored message.
+    use xmrts::protocol::proof::{Network, Proof};
+    let dir = tempfile::tempdir().unwrap();
+    let f = dir.path().join("LICENSE");
+    std::fs::write(&f, b"license text").unwrap();
+    // Single-leaf tree: root is the leaf hash, so the proof parses and the
+    // pre-flight guard hits the anchored branch.
+    let file_hash = xmrts::protocol::hash::hash_bytes(b"license text");
+    let leaf = {
+        let mut buf = [0u8; 33];
+        buf[0] = 0x00;
+        buf[1..].copy_from_slice(&file_hash);
+        xmrts::protocol::hash::hash_bytes(&buf)
+    };
+    let proof = Proof::new(
+        Network::Mainnet,
+        file_hash,
+        0,
+        1,
+        leaf,
+        [0x33u8; 32],
+        3_783_935,
+        [0xabu8; 32],
+        vec![],
+    )
+    .unwrap();
+    std::fs::write(dir.path().join("LICENSE.xmrts"), proof.to_bytes()).unwrap();
+    let out = Command::new(bin())
+        .args(["stamp", f.to_str().unwrap(), "--offline"])
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    let stderr = String::from_utf8(out.stderr).unwrap();
+    assert!(
+        stderr.contains("already exists and is anchored"),
+        "expected anchored refusal, got: {stderr}"
+    );
+}
+
+#[test]
 fn json_output_is_single_line_json() {
     use std::process::Command;
     let dir = tempfile::tempdir().unwrap();

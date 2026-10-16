@@ -1,0 +1,2 @@
+# Pinned docs dependencies (pip install -r requirements-docs.txt)
+mkdocs-material==9.7.7

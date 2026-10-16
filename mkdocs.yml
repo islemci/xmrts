@@ -1,0 +1,91 @@
+site_name: xmrts
+site_description: Self-sovereign, decentralized file timestamping on Monero.
+site_author: xmrts contributors
+site_url: https://xmrts.190529.xyz/
+
+repo_name: islemci/xmrts
+repo_url: https://github.com/islemci/xmrts
+edit_uri: blob/main/docs/
+
+theme:
+  name: material
+  logo: images/monero.svg
+  favicon: images/monero.svg
+  font:
+    text: Roboto
+    code: Roboto Mono
+  features:
+    - content.action.edit
+    - content.action.view
+    - content.code.copy
+    - content.tooltips
+    - navigation.footer
+    - navigation.tabs
+    - navigation.tabs.sticky
+    - navigation.top
+    - search.highlight
+    - search.share
+    - search.suggest
+    - toc.follow
+  palette:
+    - media: "(prefers-color-scheme)"
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: custom
+      toggle:
+        icon: material/toggle-switch
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: custom
+      toggle:
+        icon: material/toggle-switch-off
+        name: Switch to system preference
+
+extra_css:
+  - stylesheets/extra.css
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/islemci/xmrts
+      name: GitHub Repository
+
+markdown_extensions:
+  - admonition
+  - abbr
+  - def_list
+  - attr_list
+  - md_in_html
+  - footnotes
+  - meta
+  - toc:
+      permalink: true
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+  - pymdownx.details
+  - pymdownx.highlight:
+      use_pygments: true
+  - pymdownx.inlinehilite
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - tables
+
+plugins:
+  - search
+
+nav:
+  - Home: index.md
+  - Documentation:
+    - Overview: documentation.md
+    - How it works: how-it-works.md
+    - CLI reference: cli.md
+    - Wallet sidecar: wallet.md
+    - CI Action: ci.md
+    - Trust model: trust.md
+    - FAQ: faq.md

@@ -663,7 +663,10 @@ pub async fn run_inner(args: &StampArgs, verbose: bool, stagenet: bool) -> Resul
     Ok(())
 }
 
-fn canonical_key(p: &Path) -> Result<String> {
+/// Canonical string for cross-walk identity. Used by stamp and audit
+/// directory walks as a cycle guard: the same physical dir twice means
+/// stop, not loop forever.
+pub(crate) fn canonical_key(p: &Path) -> Result<String> {
     match p.canonicalize() {
         Ok(c) => Ok(c.to_string_lossy().into_owned()),
         Err(_) => Ok(p.to_string_lossy().into_owned()),

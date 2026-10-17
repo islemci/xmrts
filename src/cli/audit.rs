@@ -208,10 +208,14 @@ async fn audit_one(
 }
 
 /// Expand audit inputs: `.xmrts` files pass through, directories walk for
-/// `*.xmrts` (top level unless `--recursive`... audit always walks
-/// depth-first: proof folders are small). Sorted for determinism.
+/// `*.xmrts` (audit always walks depth-first: proof folders are small).
+/// Sorted for determinism. Like stamp, the walk never follows symlinks
+/// (a symlink loop with the same dir twice would otherwise collect the
+/// same proof file ~33 times and report it as ~33 bogus failures).
 fn expand_proofs(paths: &[PathBuf]) -> Result<Vec<PathBuf>> {
     let mut out: Vec<PathBuf> = Vec::new();
+    let mut visited: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut skipped_symlinks = 0usize;
     for p in paths {
         if p.is_file() {
             if !p
@@ -225,22 +229,48 @@ fn expand_proofs(paths: &[PathBuf]) -> Result<Vec<PathBuf>> {
             }
             out.push(p.clone());
         } else if p.is_dir() {
-            collect_proofs(p, &mut out).with_context(|| format!("Reading dir {}", p.display()))?;
+            collect_proofs(p, &mut out, &mut visited, &mut skipped_symlinks)
+                .with_context(|| format!("Reading dir {}", p.display()))?;
         } else {
             anyhow::bail!("Cannot read path: {}", p.display());
         }
+    }
+    if skipped_symlinks > 0 {
+        super::ui::note(&format!(
+            "Skipped {skipped_symlinks} symlink(s) (not followed)."
+        ));
     }
     out.sort();
     out.dedup();
     Ok(out)
 }
 
-fn collect_proofs(dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
+fn collect_proofs(
+    dir: &Path,
+    out: &mut Vec<PathBuf>,
+    visited: &mut std::collections::HashSet<String>,
+    skipped_symlinks: &mut usize,
+) -> Result<()> {
+    // Cycle guard: same canonical dir twice means stop, not loop forever.
+    let canon = super::stamp::canonical_key(dir)?;
+    if !visited.insert(canon) {
+        return Ok(());
+    }
     let mut entries: Vec<PathBuf> = std::fs::read_dir(dir)?
         .filter_map(|e| e.ok().map(|e| e.path()))
         .collect();
     entries.sort();
     for e in entries {
+        // Never follow symlinks: lstat first. This skips symlinked files
+        // and dirs alike, including broken links and cycles.
+        match std::fs::symlink_metadata(&e) {
+            Ok(md) if md.file_type().is_symlink() => {
+                *skipped_symlinks += 1;
+                continue;
+            }
+            Err(err) => return Err(err).with_context(|| format!("Reading {}", e.display())),
+            _ => {}
+        }
         if e.is_file() {
             if e.extension()
                 .is_some_and(|x| x.eq_ignore_ascii_case("xmrts"))
@@ -248,7 +278,7 @@ fn collect_proofs(dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
                 out.push(e);
             }
         } else if e.is_dir() {
-            collect_proofs(&e, out)?;
+            collect_proofs(&e, out, visited, skipped_symlinks)?;
         }
     }
     Ok(())

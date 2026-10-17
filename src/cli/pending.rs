@@ -342,3 +342,58 @@ pub fn update_txid(path: &Path, txid: &str) -> Result<()> {
     connection::atomic_write_0600(path, out.as_bytes())?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    fn temp_pending(relayed: bool) -> (tempfile::TempDir, PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("pending-abc.json");
+        let op = PendingOp {
+            files: vec!["/a.doc".to_string()],
+            file_hashes: vec![],
+            sorted_hashes: vec!["aa".repeat(32)],
+            root: "bb".repeat(32),
+            extra_hex: String::new(),
+            txid: String::new(),
+            tx_hex: "dead".to_string(),
+            fee: 12_345,
+            out_dir: None,
+            network: "mainnet".to_string(),
+            merkle_ver: 2,
+            relayed,
+        };
+        std::fs::write(&path, serde_json::to_string_pretty(&op).unwrap()).unwrap();
+        (dir, path)
+    }
+
+    /// save starts with relayed: false; only update_txid may flip it, and
+    /// it must do so in the same atomic write as the final txid.
+    #[test]
+    fn update_txid_sets_relayed_and_txid_together() {
+        let (_dir, path) = temp_pending(false);
+        update_txid(&path, "abc123hex").unwrap();
+        let op = load(&path).unwrap();
+        assert_eq!(op.txid, "abc123hex");
+        assert!(op.relayed, "relay success must mark the record relayed");
+        // Everything else survives the rewrite.
+        assert_eq!(op.files, vec!["/a.doc"]);
+        assert_eq!(op.root, "bb".repeat(32));
+        assert_eq!(op.fee, 12_345);
+    }
+
+    /// An already-true record stays true (old pendings predate the flag
+    /// and default to true); unknown/extra fields survive the rewrite.
+    #[test]
+    fn update_txid_keeps_record_true_and_extra_fields() {
+        let (_dir, path) = temp_pending(true);
+        update_txid(&path, "zzz").unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(v["relayed"], serde_json::Value::Bool(true));
+        assert_eq!(v["txid"], "zzz");
+        assert_eq!(v["network"], "mainnet");
+    }
+}

@@ -41,6 +41,11 @@ pub fn record(entry: &HistoryEntry) {
         opts.mode(0o600);
     }
     let Ok(mut f) = opts.open(&path) else { return };
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+    }
     use std::io::Write;
     let _ = writeln!(f, "{line}");
 }

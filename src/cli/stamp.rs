@@ -1154,4 +1154,18 @@ mod tests {
         std::fs::write(&foreign, b"junk").unwrap();
         assert_eq!(proof_target_status(&foreign).unwrap(), ProofTarget::Foreign);
     }
+
+    #[test]
+    fn json_stamp_needs_yes() {
+        // Machine mode cannot answer prompts: --json without --yes must
+        // fail fast and clean, for every send mode (plain, --do-not-relay),
+        // so stdout stays a single parseable document.
+        assert!(ensure_json_consent(true, false).is_err());
+        assert!(ensure_json_consent(true, true).is_ok());
+        // Interactive runs prompt as usual.
+        assert!(ensure_json_consent(false, false).is_ok());
+        assert!(ensure_json_consent(false, true).is_ok());
+        let err = format!("{:#}", ensure_json_consent(true, false).unwrap_err());
+        assert!(err.contains("--json needs --yes"), "{err}");
+    }
 }

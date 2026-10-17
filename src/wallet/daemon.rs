@@ -15,7 +15,13 @@ use thiserror::Error;
 /// are long-lived, so 10 is the floor here: `verify --json` reports
 /// `"final": false` below it, and callers needing stronger finality
 /// should wait for 20+ before relying on a proof.
-/// Depth 1 is never final.
+///
+/// Depth is user-selectable: `--min-confirmations 1` is accepted, and it
+/// means the tx sits in the tip block where one shallow reorg can still
+/// drop it. That is a documented trade-off, not a new trust assumption:
+/// every check stays fail-closed (proof height and block hash must match
+/// the chain), so a reorg only turns the proof into "no longer anchored",
+/// never into a false confirmation.
 ///
 /// Note on arithmetic: daemon `get_info.height` is the chain *length*
 /// (top block height + 1), so `confirmations = tip - tx_height`. A tx in

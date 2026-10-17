@@ -205,6 +205,18 @@ pub(crate) async fn open_flow(
     if filename.is_empty() {
         anyhow::bail!("No wallet name given.");
     }
+    // Wallet names come from a discovered list (relative paths) or a
+    // manual entry. Reject anything that could escape the wallet folder.
+    if std::path::Path::new(&filename).components().any(|c| {
+        matches!(
+            c,
+            std::path::Component::ParentDir
+                | std::path::Component::RootDir
+                | std::path::Component::Prefix(_)
+        )
+    }) {
+        anyhow::bail!("Wallet name must not contain '..' or be an absolute path.");
+    }
     for attempt in 1..=3 {
         let password = zeroize::Zeroizing::new(
             rpassword::prompt_password("Wallet password: ")

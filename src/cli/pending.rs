@@ -222,7 +222,14 @@ fn run_list(json: bool) -> Result<()> {
                         "files": op.files,
                         "missing_files": missing,
                         "txid": op.txid,
-                        "sent": !op.txid.is_empty(),
+                        // Honest states, matching the human list: a record
+                        // with a preview txid but relayed=false was built,
+                        // not broadcast (--do-not-relay or an interrupted
+                        // run). sent flips only when the record says the
+                        // relay happened; relayed is exposed for automations
+                        // that want both bits.
+                        "relayed": op.relayed,
+                        "sent": op.relayed && !op.txid.is_empty(),
                     })
                 }
                 Err(e) => serde_json::json!({

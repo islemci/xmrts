@@ -147,6 +147,7 @@ pub async fn run_inner(args: &StampArgs, verbose: bool, stagenet: bool) -> Resul
                     key,
                     "--output",
                     &sig.to_string_lossy(),
+                    "--",
                     &f.to_string_lossy(),
                 ])
                 .status()

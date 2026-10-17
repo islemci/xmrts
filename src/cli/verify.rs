@@ -364,6 +364,7 @@ fn run_gpg_verify(sig: &std::path::Path, file: &std::path::Path) -> anyhow::Resu
             "--status-fd",
             "1",
             "--verify",
+            "--",
             &sig.to_string_lossy(),
             &file.to_string_lossy(),
         ])

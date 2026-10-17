@@ -468,6 +468,11 @@ pub async fn start(cfg: &mut WalletConfig) -> Result<u32, ProcessError> {
         .create(true)
         .append(true)
         .open(&log_path)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&log_path, std::fs::Permissions::from_mode(0o600));
+    }
     let mut cmd = std::process::Command::new(&sidecar.binary);
     cmd.args(sidecar.spawn_args())
         .stdin(std::process::Stdio::null())

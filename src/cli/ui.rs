@@ -276,3 +276,38 @@ pub fn choose_number(prompt: &str, count: usize, default: usize) -> anyhow::Resu
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::short_address;
+
+    #[test]
+    fn short_address_slices_at_char_boundaries() {
+        // Long symbol so any byte slicing would land inside a multibyte
+        // char and panic; chars must come out intact instead.
+        let addr = "ß".repeat(20);
+        let out = short_address(&addr);
+        assert_eq!(out, format!("{}....{}", "ß".repeat(5), "ß".repeat(5)));
+    }
+
+    #[test]
+    fn short_address_keeps_monero_shape() {
+        // 95 chars like a real mainnet address.
+        let addr = "4".to_string() + &"8".repeat(94);
+        let out = short_address(&addr);
+        assert_eq!(out, "48888....88888");
+        assert_eq!(out.chars().count(), 5 + 4 + 5);
+    }
+
+    #[test]
+    fn short_address_passes_short_inputs_through() {
+        assert_eq!(short_address(""), "");
+        assert_eq!(short_address("abc"), "abc");
+        assert_eq!(short_address("äöü"), "äöü");
+        // Exactly 14 chars: still short regardless of byte count.
+        assert_eq!(short_address(&"ö".repeat(7)), "ö".repeat(7));
+        // 15 multibyte chars pass the threshold without a panic.
+        let out = short_address(&"ö".repeat(15));
+        assert_eq!(out, "ööööö....ööööö");
+    }
+}

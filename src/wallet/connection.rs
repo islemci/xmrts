@@ -241,29 +241,39 @@ pub fn endpoint_is_loopback(endpoint: &str) -> bool {
 /// and paste-backs. Keeps the scheme, host, port and any path/query/
 /// fragment; hides everything up to the last `@` in the authority.
 /// URLs without userinfo pass through unchanged.
+///
+/// Also scrubs userinfo hidden inside the string, like a query value
+/// carrying a redirect target (`?next=http://u:p@node`) — those would
+/// otherwise print verbatim through the same echo paths. A real
+/// authority never contains '&', '=', ';', ',', ' ', '(' or ')', so the
+/// scan ends the authority on them without ever splitting a host:port.
 pub fn display_url(url: &str) -> String {
-    let Some(scheme_end) = url.find("://") else {
-        return url.to_string();
-    };
-    let after_scheme = &url[scheme_end + 3..];
-    // Authority ends at the first '/', '?' or '#'; path separators cannot
-    // be part of userinfo, and the last '@' in the authority is the
-    // host boundary (raw '@' is not legal inside userinfo, so the last
-    // one is the safest split). Slices stay on char boundaries: the
-    // match positions of ASCII separators are always boundaries.
-    let authority_end = after_scheme
-        .find(['/', '?', '#'])
-        .unwrap_or(after_scheme.len());
-    let authority = &after_scheme[..authority_end];
-    match authority.rfind('@') {
-        Some(at) => {
-            let scheme = &url[..scheme_end];
-            let host = &authority[at + 1..];
-            let rest = &after_scheme[authority_end..];
-            format!("{scheme}://<hidden>@{host}{rest}")
+    let mut out = String::with_capacity(url.len());
+    let mut i = 0;
+    while i < url.len() {
+        let Some(offset) = url[i..].find("://") else {
+            out.push_str(&url[i..]);
+            return out;
+        };
+        let scheme_end = i + offset + 3;
+        out.push_str(&url[i..scheme_end]);
+        let rest = &url[scheme_end..];
+        let authority_end = rest
+            .find(['/', '?', '#', ' ', '&', '=', '+', ',', ';', '(', ')'])
+            .unwrap_or(rest.len());
+        let authority = &rest[..authority_end];
+        match authority.rfind('@') {
+            Some(at) => {
+                // Keep the trailing '@' and the host tail: quorum errors
+                // and daemon identity must stay identifiable.
+                out.push_str("<hidden>");
+                out.push_str(&authority[at..]);
+            }
+            None => out.push_str(authority),
         }
-        None => url.to_string(),
+        i = scheme_end + authority_end;
     }
+    out
 }
 
 /// Warning text when a daemon endpoint is remote without TLS, or `None`

@@ -1,6 +1,7 @@
 //! Minimal `monero-wallet-rpc` JSON-RPC client (spec §31 research notes).
 //! Only the methods xmrts actually needs are implemented.
 
+use reqwest::redirect::Policy;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -47,6 +48,12 @@ impl WalletRpc {
     ) -> Self {
         let endpoint_str: String = endpoint.into();
         let mut builder = Client::builder().timeout(Duration::from_secs(30));
+        // JSON-RPC endpoints do not legitimately redirect. reqwest's
+        // default follows up to 10 hops and re-sends the POST body with
+        // them, so a single hijacked 30x would re-deliver every wallet
+        // command — open_wallet password, transfer params, the tx bytes —
+        // to whatever the Location header names. Fail closed instead.
+        builder = builder.redirect(Policy::none());
         // Never proxy loopback wallet RPC: it can carry the `open_wallet`
         // password, Tor cannot reach loopback, and a remote proxy operator
         // must not see local wallet commands.

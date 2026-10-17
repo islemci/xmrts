@@ -184,6 +184,14 @@ pub fn http_client_builder_for(endpoint: Option<&str>) -> reqwest::ClientBuilder
             b = b.proxy(p);
         }
     }
+    // Daemon, wallet-side HTTP and price clients never follow redirects.
+    // A 30x from the daemon would carry the POST body — tx hashes at
+    // least, and with decode_as_json the marked-commitment queries — to
+    // whatever the Location header says, and reqwest's default follows
+    // up to ten hops. Monero RPC APIs answer in place; fail closed.
+    // (Verified: api.coingecko.com answers 200 with zero redirects, so
+    // the price feed needs no redirect tolerance either.)
+    b = b.redirect(reqwest::redirect::Policy::none());
     b
 }
 

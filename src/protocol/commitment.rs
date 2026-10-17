@@ -222,11 +222,15 @@ pub fn find_commitments(tx_extra: &[u8]) -> Result<Vec<Commitment>, CommitmentEr
                     Ok(s) => s as usize,
                     Err(_) => return partial_ok(&out, "truncated varint"),
                 };
-                if pos + size > tx_extra.len() {
+                let end = match pos.checked_add(size) {
+                    Some(e) => e,
+                    None => return partial_ok(&out, "extra field size overflow"),
+                };
+                if end > tx_extra.len() {
                     return partial_ok(&out, "truncated extra field");
                 }
-                let body = &tx_extra[pos..pos + size];
-                pos += size;
+                let body = &tx_extra[pos..end];
+                pos = end;
                 if tag == TAG_NONCE && body.len() == NONCE_PAYLOAD_LEN && body[0..5] == MAGIC {
                     out.push(parse_nonce_payload(body)?);
                 } else if tag == TAG_NONCE && body.len() == BARE_PAYLOAD_LEN {

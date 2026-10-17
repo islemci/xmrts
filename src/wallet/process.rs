@@ -327,6 +327,23 @@ fn read_pid() -> Option<u32> {
     std::fs::read_to_string(path).ok()?.trim().parse().ok()
 }
 
+/// Open (or create) the sidecar log in append mode, then force owner-only
+/// permissions: the log carries daemon address, wallet dir, and the bind
+/// port, so it must not be readable by other users. Kept separate from
+/// `start` so tests can pin the permission behavior to a real path.
+fn open_log_file(path: &Path) -> std::io::Result<std::fs::File> {
+    let f = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+    }
+    Ok(f)
+}
+
 fn refresh_all(sys: &mut sysinfo::System) {
     // Plain refresh_processes() leaves cmd/exe empty on some platforms
     // (notably macOS); request everything - identity checks need argv.
@@ -464,15 +481,7 @@ pub async fn start(cfg: &mut WalletConfig) -> Result<u32, ProcessError> {
     if let Some(parent) = log_path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let log = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&log_path)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(&log_path, std::fs::Permissions::from_mode(0o600));
-    }
+    let log = open_log_file(&log_path)?;
     let mut cmd = std::process::Command::new(&sidecar.binary);
     cmd.args(sidecar.spawn_args())
         .stdin(std::process::Stdio::null())
@@ -580,6 +589,28 @@ pub fn stop(cfg: &WalletConfig) -> Result<String, ProcessError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn log_file_open_hardens_loose_existing_mode() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("monero-wallet-rpc.log");
+        // Pre-create with group/world-readable bits, as a sidecar that
+        // crashed mid-write (or an older release) might have left behind.
+        std::fs::write(&path, b"stale\n").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        let f = open_log_file(&path).unwrap();
+        drop(f);
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "sidecar log must be owner-only");
+        // Append mode is preserved: prior content survives.
+        let mut f2 = open_log_file(&path).unwrap();
+        use std::io::Write;
+        writeln!(f2, "line").unwrap();
+        drop(f2);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "stale\nline\n");
+    }
 
     #[test]
     fn generates_credentials_without_clobbering() {

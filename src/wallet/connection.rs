@@ -551,6 +551,27 @@ mod tests {
     }
 
     #[test]
+    fn display_url_scrubs_credentials_inside_query_values() {
+        // A redirect target or callback URL carrying its own credentials
+        // would print verbatim: the echo paths must scrub the inner
+        // userinfo too, not just the outermost authority.
+        assert_eq!(
+            display_url("http://h.example/?next=http://secret:o@x.example"),
+            "http://h.example/?next=http://<hidden>@x.example"
+        );
+        assert_eq!(
+            display_url("http://h.example/?cb=https://a:b@c.example&x=1"),
+            "http://h.example/?cb=https://<hidden>@c.example&x=1"
+        );
+        // Plain query values with no userinfo shape stay readable; an
+        // '@' in a path or query value is not credentials.
+        assert_eq!(
+            display_url("http://h.example/?token=abc123&u=x@y"),
+            "http://h.example/?token=abc123&u=x@y"
+        );
+    }
+
+    #[test]
     fn display_url_leaves_plain_urls_untouched() {
         assert_eq!(
             display_url("http://127.0.0.1:18082"),
@@ -567,6 +588,13 @@ mod tests {
         );
         // No scheme: pass through as-is (never parsed as a URL here).
         assert_eq!(display_url("127.0.0.1:18082"), "127.0.0.1:18082");
+        // Multi-'@' authority matches the URL parser's split: everything
+        // before the last '@' is userinfo, so all of it is hidden while
+        // the effective host stays visible for quorum identification.
+        assert_eq!(
+            display_url("http://a@evil.example:80@real.example"),
+            "http://<hidden>@real.example"
+        );
     }
 
     #[test]

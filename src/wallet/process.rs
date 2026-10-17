@@ -153,17 +153,20 @@ pub fn ensure_credentials(cfg: &mut WalletConfig) -> bool {
 }
 
 /// Split `http(s)://host:port` into (host, port).
+/// Endpoint text in errors is redacted: endpoints may carry embedded
+/// credentials and this text ends up in terminal echoes.
 pub fn parse_endpoint(endpoint: &str) -> Result<(String, u16), ProcessError> {
+    let redacted = super::connection::display_url(endpoint);
     let rest = endpoint
         .strip_prefix("http://")
         .or_else(|| endpoint.strip_prefix("https://"))
-        .ok_or_else(|| ProcessError::Config(format!("bad endpoint '{endpoint}'")))?;
+        .ok_or_else(|| ProcessError::Config(format!("bad endpoint '{redacted}'")))?;
     let rest = rest.trim_end_matches('/');
     let (host, port) = rest
         .rsplit_once(':')
-        .ok_or_else(|| ProcessError::Config(format!("endpoint '{endpoint}' has no port")))?;
+        .ok_or_else(|| ProcessError::Config(format!("endpoint '{redacted}' has no port")))?;
     if host.is_empty() {
-        return Err(ProcessError::Config(format!("bad endpoint '{endpoint}'")));
+        return Err(ProcessError::Config(format!("bad endpoint '{redacted}'")));
     }
     // Strip brackets for IPv6 literals (bind uses the same form).
     let host = host.strip_prefix('[').unwrap_or(host);
@@ -207,7 +210,7 @@ pub fn resolve(cfg: &WalletConfig) -> Result<SidecarConfig, ProcessError> {
     if !is_loopback(&host) {
         return Err(ProcessError::NotConfigured(format!(
             "Sidecar needs a local endpoint. {} is remote so control stays off",
-            cfg.endpoint
+            super::connection::display_url(&cfg.endpoint)
         )));
     }
     let binary = find_binary(cfg.wallet_rpc_path.as_deref())?;
@@ -455,13 +458,13 @@ pub async fn start(cfg: &mut WalletConfig) -> Result<u32, ProcessError> {
         Ok(_) => {
             return Err(ProcessError::Config(format!(
                 "Something else already answers at {}. Stop it first or keep using it",
-                cfg.endpoint
+                super::connection::display_url(&cfg.endpoint)
             )));
         }
         Err(e) if e.is_auth_failure() => {
             return Err(ProcessError::Config(format!(
                 "Something else answers at {} with a different login. Stop it first, then retry",
-                cfg.endpoint
+                super::connection::display_url(&cfg.endpoint)
             )));
         }
         Err(_) => {}

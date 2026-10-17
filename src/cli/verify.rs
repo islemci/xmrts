@@ -295,15 +295,17 @@ fn merge_quorum(
     for (daemon, other) in daemons.iter().skip(1).zip(it) {
         if other.height != anchor.height || other.block_hash != anchor.block_hash {
             // List every daemon's view so the outlier is identifiable with
-            // 3+ daemons, not just the first two.
+            // 3+ daemons, not just the first two. URLs are redacted: they
+            // may carry credentials, but the host tail stays identifiable.
             let mut views = vec![format!(
                 "{}: block {} ({})",
-                daemons[0],
+                connection::display_url(&daemons[0]),
                 anchor.height,
                 hex::encode(anchor.block_hash)
             )];
             views.push(format!(
-                "{daemon}: block {} ({})",
+                "{}: block {} ({})",
+                connection::display_url(daemon),
                 other.height,
                 hex::encode(other.block_hash)
             ));
@@ -344,8 +346,14 @@ fn anchored_json(
         "block_time": crate::wallet::daemon::format_block_time(anchor.block_timestamp),
         "confirmations": anchor.confirmations,
         "network": proof.network.as_str(),
-        "daemon": daemons.first().cloned().unwrap_or_default(),
-        "daemons": daemons,
+        "daemon": daemons
+            .first()
+            .map(|d| connection::display_url(d))
+            .unwrap_or_default(),
+        "daemons": daemons
+            .iter()
+            .map(|d| connection::display_url(d))
+            .collect::<Vec<_>>(),
     });
     if let Some(s) = signer {
         v["signer"] = serde_json::Value::String(s.to_string());
@@ -503,7 +511,8 @@ fn check_daemons_distinct(daemons: &[String]) -> anyhow::Result<()> {
         let id = daemon_identity(d);
         if !seen.insert(id.clone()) {
             anyhow::bail!(
-                "Quorum needs distinct daemons: '{d}' repeats '{id}'. One --daemon, or independent nodes."
+                "Quorum needs distinct daemons: '{}' repeats '{id}'. One --daemon, or independent nodes.",
+                connection::display_url(d)
             );
         }
     }
@@ -594,7 +603,10 @@ pub(crate) async fn blockchain_check(
             crate::wallet::daemon::DaemonError::CommitmentAbsent { .. } => anyhow::anyhow!(
                 "Tx {txid_hex} holds no mark for this file.\nIt lives but it does not anchor you. The wallet may have dropped the mark."
             ),
-            other => anyhow::anyhow!("Daemon {daemon} says: {other}"),
+            other => anyhow::anyhow!(
+                "Daemon {} says: {other}",
+                connection::display_url(daemon)
+            ),
         })?;
         anchors.push(anchor);
     }

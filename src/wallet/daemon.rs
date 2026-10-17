@@ -108,7 +108,7 @@ impl DaemonClient {
             .send()
             .await
             .map_err(|e| DaemonError::Unreachable {
-                endpoint: self.endpoint.clone(),
+                endpoint: super::connection::display_url(&self.endpoint),
                 message: e.to_string(),
             })?
             .json()
@@ -177,7 +177,7 @@ pub async fn block_hash(daemon_endpoint: &str, height: u64) -> Result<[u8; 32], 
         .send()
         .await
         .map_err(|e| DaemonError::Unreachable {
-            endpoint: daemon_endpoint.to_string(),
+            endpoint: super::connection::display_url(daemon_endpoint),
             message: e.to_string(),
         })?
         .json()
@@ -217,7 +217,7 @@ pub async fn block_header(
         .send()
         .await
         .map_err(|e| DaemonError::Unreachable {
-            endpoint: daemon_endpoint.to_string(),
+            endpoint: super::connection::display_url(daemon_endpoint),
             message: e.to_string(),
         })?
         .json()
@@ -327,7 +327,7 @@ pub async fn get_info(daemon_endpoint: &str) -> Result<(String, u64), DaemonErro
         .send()
         .await
         .map_err(|e| DaemonError::Unreachable {
-            endpoint: daemon_endpoint.to_string(),
+            endpoint: super::connection::display_url(daemon_endpoint),
             message: e.to_string(),
         })?
         .json()

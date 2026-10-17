@@ -133,7 +133,8 @@ pub async fn run(args: &ConnectArgs, verbose: bool, stagenet: bool) -> Result<()
     let version = client.get_version().await.with_context(|| {
         format!(
             "Wallet is quiet.\n\nEndpoint:\n{}\n\nTry:\n\n    xmrts doctor{}",
-            cfg.endpoint, sidecar_hint
+            connection::display_url(&cfg.endpoint),
+            sidecar_hint
         )
     })?;
     if verbose {

@@ -53,10 +53,12 @@ fn describe(cfg: &WalletConfig, key: &str) -> Result<String> {
         "price" => cfg.price.to_string(),
         "autoclose" => cfg.autoclose.to_string(),
         "currency" => cfg.currency.clone().unwrap_or_else(|| "usd".to_string()),
-        "endpoint" => cfg.endpoint.clone(),
+        // URLs may carry embedded credentials: redact them for display.
+        "endpoint" => connection::display_url(&cfg.endpoint),
         "daemon" => cfg
             .daemon_endpoint
-            .clone()
+            .as_deref()
+            .map(connection::display_url)
             .unwrap_or_else(|| "(empty)".to_string()),
         "network" => cfg.network.clone(),
         "wallet-dir" => cfg
@@ -71,7 +73,11 @@ fn describe(cfg: &WalletConfig, key: &str) -> Result<String> {
             .username
             .clone()
             .unwrap_or_else(|| "(empty)".to_string()),
-        "proxy" => cfg.proxy.clone().unwrap_or_else(|| "(empty)".to_string()),
+        "proxy" => cfg
+            .proxy
+            .as_deref()
+            .map(connection::display_url)
+            .unwrap_or_else(|| "(empty)".to_string()),
         "commitment" => cfg.commitment.clone().unwrap_or_else(|| "bare".to_string()),
         "password" => "(hidden)".to_string(),
         _ => anyhow::bail!("Unknown setting '{key}'. Try `xmrts setting list`"),

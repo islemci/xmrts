@@ -72,7 +72,7 @@ impl WalletRpc {
         let url = format!("{}/json_rpc", self.endpoint.trim_end_matches('/'));
         let body = json!({"jsonrpc": "2.0", "id": "0", "method": method, "params": params});
         let conn_err = |e: reqwest::Error| RpcError::Connection {
-            endpoint: self.endpoint.clone(),
+            endpoint: super::connection::display_url(&self.endpoint),
             message: e.to_string(),
         };
         // First attempt: no auth header. monero-wallet-rpc answers with
@@ -89,7 +89,7 @@ impl WalletRpc {
         if resp.status() == reqwest::StatusCode::UNAUTHORIZED {
             let (Some(u), Some(p)) = (self.username.as_deref(), self.password.as_deref()) else {
                 return Err(RpcError::Connection {
-                    endpoint: self.endpoint.clone(),
+                    endpoint: super::connection::display_url(&self.endpoint),
                     message: "wallet RPC requires login (HTTP 401) but no username/password is configured; run `xmrts connect --username USER --save-auth`".to_string(),
                 });
             };
@@ -101,7 +101,7 @@ impl WalletRpc {
                 .collect();
             let auth_header = digest_auth_header("POST", "/json_rpc", &challenges, u, p)
                 .ok_or_else(|| RpcError::Connection {
-                    endpoint: self.endpoint.clone(),
+                    endpoint: super::connection::display_url(&self.endpoint),
                     message: "could not answer the wallet RPC auth challenge (expected Digest); if the wallet uses --rpc-login from a custom build, run it without --rpc-login on localhost instead".to_string(),
                 })?;
             resp = self
@@ -114,7 +114,7 @@ impl WalletRpc {
                 .map_err(conn_err)?;
             if resp.status() == reqwest::StatusCode::UNAUTHORIZED {
                 return Err(RpcError::Connection {
-                    endpoint: self.endpoint.clone(),
+                    endpoint: super::connection::display_url(&self.endpoint),
                     message: "wallet RPC rejected the username/password (HTTP 401 even with Digest response)".to_string(),
                 });
             }

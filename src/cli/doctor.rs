@@ -42,7 +42,7 @@ pub async fn run(_args: &DoctorArgs, verbose: bool, stagenet: bool) -> Result<()
 
     let cfg = connection::load_config();
     super::ui::header("◆", "Settings");
-    super::ui::field("Endpoint", &cfg.endpoint);
+    super::ui::field("Endpoint", &connection::display_url(&cfg.endpoint));
     if stagenet {
         super::ui::field("Network", "stagenet (flag; saved: {})");
         println!("  saved: {}", cfg.network);
@@ -65,7 +65,7 @@ pub async fn run(_args: &DoctorArgs, verbose: bool, stagenet: bool) -> Result<()
         }
     }
     match &cfg.daemon_endpoint {
-        Some(d) => super::ui::field("Daemon", d),
+        Some(d) => super::ui::field("Daemon", &connection::display_url(d)),
         None => {
             super::ui::note("No daemon set. Chain checks will wait.");
             super::ui::hint("Set one with `xmrts connect --daemon http://127.0.0.1:18081`.");

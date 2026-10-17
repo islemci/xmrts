@@ -233,14 +233,49 @@ pub fn endpoint_is_loopback(endpoint: &str) -> bool {
     h == "127.0.0.1" || h == "localhost" || h == "::1"
 }
 
+/// Redact `user:pass@` userinfo from a URL for display.
+///
+/// Endpoints may carry embedded RPC credentials (saved config, pasted
+/// `--daemon` values), and URL text gets echoed into error messages,
+/// `doctor`, `setting list` and JSON documents that end up in CI logs
+/// and paste-backs. Keeps the scheme, host, port and any path/query/
+/// fragment; hides everything up to the last `@` in the authority.
+/// URLs without userinfo pass through unchanged.
+pub fn display_url(url: &str) -> String {
+    let Some(scheme_end) = url.find("://") else {
+        return url.to_string();
+    };
+    let after_scheme = &url[scheme_end + 3..];
+    // Authority ends at the first '/', '?' or '#'; path separators cannot
+    // be part of userinfo, and the last '@' in the authority is the
+    // host boundary (raw '@' is not legal inside userinfo, so the last
+    // one is the safest split). Slices stay on char boundaries: the
+    // match positions of ASCII separators are always boundaries.
+    let authority_end = after_scheme
+        .find(['/', '?', '#'])
+        .unwrap_or(after_scheme.len());
+    let authority = &after_scheme[..authority_end];
+    match authority.rfind('@') {
+        Some(at) => {
+            let scheme = &url[..scheme_end];
+            let host = &authority[at + 1..];
+            let rest = &after_scheme[authority_end..];
+            format!("{scheme}://<hidden>@{host}{rest}")
+        }
+        None => url.to_string(),
+    }
+}
+
 /// Warning text when a daemon endpoint is remote without TLS, or `None`
 /// when the transport is loopback or TLS. Callers print it via `ui::warn`
 /// and (for `--json` modes) include it in their warnings array so
-/// automation sees it too.
+/// automation sees it too. The daemon URL is redacted: callers echo this
+/// text straight into logs and warnings.
 pub fn insecure_daemon_warning(daemon: &str) -> Option<String> {
     if daemon.to_ascii_lowercase().starts_with("http://") && !endpoint_is_loopback(daemon) {
         Some(format!(
-            "Daemon {daemon} is remote without TLS. A network attacker could lie about the chain."
+            "Daemon {} is remote without TLS. A network attacker could lie about the chain.",
+            display_url(daemon)
         ))
     } else {
         None

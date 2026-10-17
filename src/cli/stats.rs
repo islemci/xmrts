@@ -30,6 +30,13 @@ fn history_path() -> Result<std::path::PathBuf> {
 /// here must never fail the stamp itself).
 pub fn record(entry: &HistoryEntry) {
     let Ok(path) = history_path() else { return };
+    record_at(&path, entry);
+}
+
+/// Write one history line to an explicit path. Kept separate from
+/// [`record`] so tests can pin the permission behavior without touching
+/// the user's real config dir.
+pub(crate) fn record_at(path: &std::path::Path, entry: &HistoryEntry) {
     let Ok(line) = serde_json::to_string(entry) else {
         return;
     };
@@ -40,11 +47,13 @@ pub fn record(entry: &HistoryEntry) {
         use std::os::unix::fs::OpenOptionsExt;
         opts.mode(0o600);
     }
-    let Ok(mut f) = opts.open(&path) else { return };
+    let Ok(mut f) = opts.open(path) else { return };
+    // A pre-existing history may have been created by an older release
+    // (or by other tooling) with looser bits: harden it in place.
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
     }
     use std::io::Write;
     let _ = writeln!(f, "{line}");
@@ -144,6 +153,34 @@ pub fn run(args: &StatsArgs) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn record_hardens_loose_history_mode_and_appends() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("history.jsonl");
+        // Pre-create the file with world/group-readable bits, as an old
+        // release or other tooling might have left it.
+        std::fs::write(&path, b"").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        record_at(
+            &path,
+            &HistoryEntry {
+                txid: "ab".to_string(),
+                fee: 15000,
+                files: 1,
+                height: 3_000_090,
+                network: "mainnet".to_string(),
+                time_unix: 1_760_000_000,
+            },
+        );
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "history line must harden the file to 0600");
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(text.lines().count(), 1);
+        assert!(serde_json::from_str::<HistoryEntry>(text.trim()).is_ok());
+    }
 
     #[test]
     fn history_entry_round_trip() {

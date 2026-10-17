@@ -82,6 +82,18 @@ pub(crate) fn resolve_min_confirmations(opt: Option<u64>) -> Result<u64> {
     }
 }
 
+/// `--json` stdout must stay a single parseable document, and no prompt
+/// can be answered by automation. This holds for every `--json` run,
+/// including `--do-not-relay` previews: without it, the "Send now?"
+/// prompt would spill its bytes onto stdout ahead of the JSON document.
+/// Called before any wallet or hash work so the failure is fast.
+pub(crate) fn ensure_json_consent(json: bool, yes: bool) -> Result<()> {
+    if json && !yes {
+        anyhow::bail!("--json needs --yes: no prompt can be answered in machine mode");
+    }
+    Ok(())
+}
+
 pub async fn run(args: &StampArgs, verbose: bool, stagenet: bool) -> Result<()> {
     let result = run_inner(args, verbose, stagenet).await;
     // Release the wallet files when done (success or not) so the Monero
@@ -103,6 +115,7 @@ pub async fn run_inner(args: &StampArgs, verbose: bool, stagenet: bool) -> Resul
         super::ui::set_quiet(true);
     }
     let _ = connection::ensure_dirs();
+    ensure_json_consent(args.json, args.yes)?;
     let min_conf = resolve_min_confirmations(args.min_confirmations)?;
     if args.files.is_empty() {
         anyhow::bail!("No files given.");
@@ -454,11 +467,8 @@ pub async fn run_inner(args: &StampArgs, verbose: bool, stagenet: bool) -> Resul
         relayed: !args.do_not_relay,
     })?;
 
-    // Machine mode cannot answer prompts on stdout: require --yes.
-    if args.json && !args.yes && !args.do_not_relay {
-        let _ = std::fs::remove_file(&pending_path);
-        anyhow::bail!("--json needs --yes (or --do-not-relay): refusing to prompt on stdout");
-    }
+    // Machine mode never prompts: `ensure_json_consent` already required
+    // --yes when --json, so interactive consent is the only remaining path.
     if !args.yes && !super::ui::confirm("Send now? [y/N] ")? {
         let _ = std::fs::remove_file(&pending_path);
         super::ui::note("Stopped. No funds spent. Nothing published.");

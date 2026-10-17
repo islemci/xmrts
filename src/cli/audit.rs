@@ -283,3 +283,66 @@ fn collect_proofs(
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Regression pin: a symlink loop must not resurface the same proof
+    /// dozens of times as bogus failures (the old walk collected `a.xmrts`
+    /// once per kernel hop until the 32-link cap and failed the audit).
+    #[test]
+    fn symlink_loop_collects_each_real_proof_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir(root.join("one")).unwrap();
+        std::fs::create_dir(root.join("two")).unwrap();
+        for name in ["a.xmrts", "b.xmrts"] {
+            std::fs::write(root.join("one").join(name), b"").unwrap();
+        }
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink("../two", root.join("one/S")).unwrap();
+            std::os::unix::fs::symlink("../one", root.join("two/S")).unwrap();
+        }
+        let proofs = expand_proofs(&[root.to_path_buf()]).unwrap();
+        let mut names: Vec<&str> = proofs
+            .iter()
+            .map(|p| p.file_name().unwrap().to_str().unwrap())
+            .collect();
+        names.sort();
+        assert_eq!(names, vec!("a.xmrts", "b.xmrts"), "{proofs:?}");
+        // They came from the real dir, not through the loop.
+        for p in &proofs {
+            assert_eq!(p.parent().unwrap().file_name().unwrap(), "one");
+        }
+    }
+
+    #[test]
+    fn self_referential_link_yields_the_walked_proof_exactly() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a.xmrts"), b"").unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(".", dir.path().join("loop")).unwrap();
+        let proofs = expand_proofs(&[dir.path().to_path_buf()]).unwrap();
+        assert_eq!(proofs.len(), 1);
+        assert_eq!(proofs[0].file_name().unwrap(), "a.xmrts");
+    }
+
+    /// Explicitly named proof files keep passing through: even a symlink
+    /// argument is followed (intentional hand-picked use, like stamp).
+    #[test]
+    fn explicit_proof_args_pass_through() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a.xmrts"), b"").unwrap();
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(dir.path().join("a.xmrts"), dir.path().join("link.xmrts"))
+                .unwrap();
+            let proofs = expand_proofs(&[dir.path().join("link.xmrts")]).unwrap();
+            assert_eq!(proofs.len(), 1);
+        }
+        let direct = expand_proofs(&[dir.path().join("a.xmrts")]).unwrap();
+        assert_eq!(direct.len(), 1);
+    }
+}

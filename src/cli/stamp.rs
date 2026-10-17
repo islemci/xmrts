@@ -94,7 +94,12 @@ pub(crate) fn ensure_json_consent(json: bool, yes: bool) -> Result<()> {
     Ok(())
 }
 
-pub async fn run(args: &StampArgs, verbose: bool, stagenet: bool) -> Result<()> {
+/// Run the stamp pipeline and report what took over.
+/// `Ok(true)`: the pending machinery owns recovery from here (pending
+/// record saved or proofs written) - queue flush may clear the queue.
+/// `Ok(false)`: nothing was sent because the user declined the send.
+/// Err: the stamp failed; callers keep whatever state they hold.
+pub async fn run(args: &StampArgs, verbose: bool, stagenet: bool) -> Result<bool> {
     let result = run_inner(args, verbose, stagenet).await;
     // Release the wallet files when done (success or not) so the Monero
     // GUI or anything else can open the wallet afterwards. Best-effort:
@@ -107,10 +112,10 @@ pub async fn run(args: &StampArgs, verbose: bool, stagenet: bool) -> Result<()> 
             super::ui::note("Wallet closed. Other apps can open it now.");
         }
     }
-    result
+    Ok(result?)
 }
 
-pub async fn run_inner(args: &StampArgs, verbose: bool, stagenet: bool) -> Result<()> {
+pub async fn run_inner(args: &StampArgs, verbose: bool, stagenet: bool) -> Result<bool> {
     if args.json {
         super::ui::set_quiet(true);
     }
@@ -284,7 +289,7 @@ pub async fn run_inner(args: &StampArgs, verbose: bool, stagenet: bool) -> Resul
                 .unwrap()
             );
         }
-        return Ok(());
+        return Ok(true);
     }
 
     let mut client = cfg.client();
@@ -479,7 +484,9 @@ pub async fn run_inner(args: &StampArgs, verbose: bool, stagenet: bool) -> Resul
                     .unwrap()
             );
         }
-        return Ok(());
+        // Nothing sent and no recovery record saved: the caller must not
+        // clear queue entries collected for this stamp.
+        return Ok(false);
     }
 
     let tx_hash = if args.do_not_relay {
@@ -670,7 +677,7 @@ pub async fn run_inner(args: &StampArgs, verbose: bool, stagenet: bool) -> Resul
             .unwrap()
         );
     }
-    Ok(())
+    Ok(true)
 }
 
 /// Canonical string for cross-walk identity. Used by stamp and audit

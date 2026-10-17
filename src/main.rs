@@ -13,7 +13,9 @@ async fn main() -> Result<()> {
     let result = match &cli.command {
         Command::Init(args) => xmrts::cli::init::run(args),
         Command::Connect(args) => xmrts::cli::connect::run(args, cli.verbose, cli.stagenet).await,
-        Command::Stamp(args) => xmrts::cli::stamp::run(args, cli.verbose, cli.stagenet).await,
+        Command::Stamp(args) => xmrts::cli::stamp::run(args, cli.verbose, cli.stagenet)
+            .await
+            .map(|_stamped| ()),
         Command::Verify(args) => xmrts::cli::verify::run(args, cli.verbose, cli.stagenet).await,
         Command::Audit(args) => xmrts::cli::audit::run(args, cli.verbose, cli.stagenet).await,
         Command::Doctor(args) => xmrts::cli::doctor::run(args, cli.verbose, cli.stagenet).await,

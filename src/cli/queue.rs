@@ -340,10 +340,16 @@ async fn run_flush(
         json,
         sign_with: None,
     };
-    super::stamp::run(&stamp_args, verbose, stagenet).await?;
+    let stamped = super::stamp::run(&stamp_args, verbose, stagenet).await?;
     // The stamp pipeline owns recovery from here (pending records,
-    // `finalize`, `watch`): the queue's job is done.
-    save_queue(&[])?;
+    // `finalize`, `watch`): the queue's job is done. But only when a
+    // stamp actually proceeded: a declined send ("Send now? -> no")
+    // leaves the queue intact so the collected files still wait.
+    if stamped {
+        save_queue(&[])?;
+    } else {
+        super::ui::note("Nothing stamped. Queue kept. Flush again when ready.");
+    }
     Ok(())
 }
 

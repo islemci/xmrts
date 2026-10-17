@@ -99,9 +99,15 @@ pub fn field(label: &str, value: &str) {
 
 /// Shorten a long address for display: first 5 plus last 5.
 /// Short inputs pass through untouched.
+/// Counts characters, not bytes: wallet RPC replies are expected to be
+/// the usual ASCII base58, but a buggy or hostile wallet returning
+/// non-ASCII must never panic the CLI on a UTF-8 boundary.
 pub fn short_address(addr: &str) -> String {
-    if addr.len() > 14 {
-        format!("{}....{}", &addr[..5], &addr[addr.len() - 5..])
+    let chars = addr.chars().count();
+    if chars > 14 {
+        let head: String = addr.chars().take(5).collect();
+        let tail: String = addr.chars().skip(chars - 5).collect();
+        format!("{head}....{tail}")
     } else {
         addr.to_string()
     }

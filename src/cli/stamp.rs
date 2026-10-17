@@ -164,16 +164,16 @@ pub async fn run_inner(args: &StampArgs, verbose: bool, stagenet: bool) -> Resul
             // `--` separator fix for files).</think><tool_call>edit<arg_key>newString</arg_key><arg_value>            super::ui::note(&format!("Signing {} ...", f.display()));
             // No `--yes`: gpg must never overwrite an existing .sig on its
             // own; the existence check above fails first.
-            // `--local-user=<value>` binds the key id to the option, so a
-            // value like `--dry-run` stays a key spec and cannot be
+            // `--local-user=<value>` and `--output=<path>` bind their
+            // values to the option: a key id or a dash-prefixed signature
+            // path (passed as `xmrts stamp ... -- -file`) cannot be
             // re-parsed as a fresh gpg option (same family as the earlier
             // `--` separator fix for file args).
             let status = std::process::Command::new("gpg")
                 .args([
                     "--detach-sign",
                     &format!("--local-user={key}"),
-                    "--output",
-                    &sig.to_string_lossy(),
+                    &format!("--output={}", sig.to_string_lossy()),
                     "--",
                     &f.to_string_lossy(),
                 ])

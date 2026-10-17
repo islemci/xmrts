@@ -219,12 +219,15 @@ pub fn find_commitments(tx_extra: &[u8]) -> Result<Vec<Commitment>, CommitmentEr
             }
             _ => {
                 let size = match read_varint(tx_extra, &mut pos) {
-                    Ok(s) => s as usize,
+                    Ok(s) => usize::try_from(s),
                     Err(_) => return partial_ok(&out, "truncated varint"),
                 };
-                let end = match pos.checked_add(size) {
-                    Some(e) => e,
-                    None => return partial_ok(&out, "extra field size overflow"),
+                let end = match size {
+                    Ok(size) => match pos.checked_add(size) {
+                        Some(e) => e,
+                        None => return partial_ok(&out, "extra field size overflow"),
+                    },
+                    Err(_) => return partial_ok(&out, "extra field size too large"),
                 };
                 if end > tx_extra.len() {
                     return partial_ok(&out, "truncated extra field");
@@ -328,6 +331,30 @@ mod tests {
         extra.extend_from_slice(&[0xBBu8; 32]);
         extra.extend_from_slice(&[0xCCu8; 32]);
         extra.extend_from_slice(&hex::decode(build_tx_extra_hex(&root)).unwrap());
+        let found = find_commitments(&extra).unwrap();
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].root, root);
+    }
+
+    #[test]
+    fn oversized_field_size_is_rejected_not_panic() {
+        // Malformed (hostile daemon-supplied) tx_extra must produce an
+        // error, never a panic or an out-of-bounds read. Regression for
+        // the unchecked `pos + size` slice bound: sizes near usize::MAX
+        // used to overflow the bound check. usize::MAX encodes as ten
+        // varint bytes (0xFF...FF 0x01).
+        let mut max_varint = vec![0x03];
+        max_varint.extend_from_slice(&[0xFFu8; 9]);
+        max_varint.push(0x01);
+        assert!(find_commitments(&max_varint).is_err());
+        // A merely huge (not usize-overflowing) size truncates cleanly too.
+        let mut huge = vec![0x03];
+        huge.extend_from_slice(&[0x80, 0x80, 0x80, 0x80, 0x80, 0x10]); // 2^40
+        assert!(find_commitments(&huge).is_err());
+        // With a real commitment ahead of the garbage, partial mode keeps it.
+        let root = [0x66u8; 32];
+        let mut extra = hex::decode(build_tx_extra_hex(&root)).unwrap();
+        extra.extend_from_slice(&max_varint[1..]); // garbage after the field
         let found = find_commitments(&extra).unwrap();
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].root, root);

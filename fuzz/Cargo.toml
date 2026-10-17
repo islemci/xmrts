@@ -10,9 +10,16 @@ cargo-fuzz = true
 [dependencies]
 libfuzzer-sys = "0.4"
 xmrts = { path = ".." }
+hex = "0.4"
 
 [[bin]]
 name = "proof_from_bytes"
 path = "fuzz_targets/proof_from_bytes.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "commitment_from_bytes"
+path = "fuzz_targets/commitment_from_bytes.rs"
 test = false
 doc = false

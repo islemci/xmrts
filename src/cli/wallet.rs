@@ -150,6 +150,26 @@ fn prompt_line(prompt: &str) -> Result<String> {
     Ok(line.trim().to_string())
 }
 
+/// Reject wallet names that could escape the wallet folder. Names from a
+/// discovered list are relative (`.keys` basenames, possibly one subdir
+/// deep) and pass; absolute paths, `..` traversal, or drive prefixes fail.
+pub(crate) fn validate_wallet_name(filename: &str) -> Result<()> {
+    if filename.starts_with('/') {
+        anyhow::bail!("Wallet name must be a relative file name, not {filename}");
+    }
+    if std::path::Path::new(filename).components().any(|c| {
+        matches!(
+            c,
+            std::path::Component::ParentDir
+                | std::path::Component::RootDir
+                | std::path::Component::Prefix(_)
+        )
+    }) {
+        anyhow::bail!("Wallet name must not contain '..' or be an absolute path.");
+    }
+    Ok(())
+}
+
 /// Interactive `open_wallet`. Password comes from a hidden prompt.
 /// It lives in wiped memory for one call only. Never saved or logged.
 /// `pub(crate)` so `stamp` can auto-open when nothing is open yet.
@@ -205,18 +225,7 @@ pub(crate) async fn open_flow(
     if filename.is_empty() {
         anyhow::bail!("No wallet name given.");
     }
-    // Wallet names come from a discovered list (relative paths) or a
-    // manual entry. Reject anything that could escape the wallet folder.
-    if std::path::Path::new(&filename).components().any(|c| {
-        matches!(
-            c,
-            std::path::Component::ParentDir
-                | std::path::Component::RootDir
-                | std::path::Component::Prefix(_)
-        )
-    }) {
-        anyhow::bail!("Wallet name must not contain '..' or be an absolute path.");
-    }
+    validate_wallet_name(&filename)?;
     for attempt in 1..=3 {
         let password = zeroize::Zeroizing::new(
             rpassword::prompt_password("Wallet password: ")
@@ -285,5 +294,20 @@ mod tests {
             list_wallets(dir.path().to_str().unwrap()),
             vec!["a".to_string(), "b".to_string()]
         );
+    }
+
+    #[test]
+    fn wallet_names_reject_traversal_and_absolute_paths() {
+        // Plain names and one-subdir-deep discovered names pass.
+        assert!(validate_wallet_name("savings").is_ok());
+        assert!(validate_wallet_name("sub/savings").is_ok());
+        assert!(validate_wallet_name("sub.dir/name.v2.keys").is_ok());
+        assert!(validate_wallet_name(".hidden.keys").is_ok());
+        // Traversal and absolute paths fail. (Drive-letter prefixes and
+        // `C:\style` roots are covered by the component checks on Windows
+        // builds, where std parses them as Prefix/RootDir components.)
+        assert!(validate_wallet_name("../savings").is_err());
+        assert!(validate_wallet_name("sub/../../savings").is_err());
+        assert!(validate_wallet_name("/etc/shadow").is_err());
     }
 }

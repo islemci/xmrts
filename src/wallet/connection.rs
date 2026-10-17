@@ -514,4 +514,58 @@ mod tests {
         assert_eq!(mode, 0o600);
         assert_eq!(std::fs::read(&path).unwrap(), b"password = 2");
     }
+
+    #[test]
+    fn display_url_hides_embedded_credentials() {
+        assert_eq!(
+            display_url("http://stamp:topsecretpw@127.0.0.1:18082"),
+            "http://<hidden>@127.0.0.1:18082"
+        );
+        // Path, query and fragment survive the redaction.
+        assert_eq!(
+            display_url("https://u:p@node.example/x?y=1#frag"),
+            "https://<hidden>@node.example/x?y=1#frag"
+        );
+        // Last '@' in the authority wins, so weird userinfo still hides it all.
+        assert_eq!(
+            display_url("https://u@p@node.example"),
+            "https://<hidden>@node.example"
+        );
+        // Portless hosts and userinfo-only credentials.
+        assert_eq!(display_url("http://bob@monerod"), "http://<hidden>@monerod");
+        // Non-http URLs (proxies) get the same treatment.
+        assert_eq!(
+            display_url("socks5h://tor:hunter2@127.0.0.1:9050"),
+            "socks5h://<hidden>@127.0.0.1:9050"
+        );
+    }
+
+    #[test]
+    fn display_url_leaves_plain_urls_untouched() {
+        assert_eq!(
+            display_url("http://127.0.0.1:18082"),
+            "http://127.0.0.1:18082"
+        );
+        assert_eq!(
+            display_url("https://node.example:18081"),
+            "https://node.example:18081"
+        );
+        // '@' in the path is not userinfo: nothing to hide.
+        assert_eq!(
+            display_url("http://node.example/x@y"),
+            "http://node.example/x@y"
+        );
+        // No scheme: pass through as-is (never parsed as a URL here).
+        assert_eq!(display_url("127.0.0.1:18082"), "127.0.0.1:18082");
+    }
+
+    #[test]
+    fn insecure_daemon_warning_redacts_credentials() {
+        let w = insecure_daemon_warning("http://u:secret@node.example:18081")
+            .expect("remote plain http must warn");
+        assert!(w.contains("<hidden>"), "{w}");
+        assert!(!w.contains("secret"), "{w}");
+        // Loopback plain http stays quiet.
+        assert!(insecure_daemon_warning("http://u:secret@127.0.0.1:18081").is_none());
+    }
 }

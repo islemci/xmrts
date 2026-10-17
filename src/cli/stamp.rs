@@ -112,7 +112,7 @@ pub async fn run(args: &StampArgs, verbose: bool, stagenet: bool) -> Result<bool
             super::ui::note("Wallet closed. Other apps can open it now.");
         }
     }
-    Ok(result?)
+    result
 }
 
 pub async fn run_inner(args: &StampArgs, verbose: bool, stagenet: bool) -> Result<bool> {

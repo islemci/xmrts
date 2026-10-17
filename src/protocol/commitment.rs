@@ -404,4 +404,61 @@ mod tests {
         assert!(find_commitment_for_root(&extra, &[0x22u8; 32]).is_err());
         assert!(find_commitment_for_root(&extra, &[0x11u8; 32]).is_ok());
     }
+
+    /// Deterministic version of `commitment_from_bytes.rs` (runs without
+    /// nightly): every truncation and single-bit flip of well-formed
+    /// tx_extra must never panic, and anything the tolerant parser still
+    /// accepts must round trip through the builder unchanged.
+    #[test]
+    fn commitment_parser_tolerates_hostile_bytes() {
+        let root = [0x44u8; 32];
+        let mut with_pubkey = vec![0x01];
+        with_pubkey.extend_from_slice(&[0xAAu8; 32]); // tx pubkey
+        with_pubkey
+            .extend_from_slice(&hex::decode(build_tx_extra_hex_for(&root, MERKLE_V2)).unwrap());
+        let mut with_pubkeys_tag = with_pubkey.clone();
+        with_pubkeys_tag.extend_from_slice(&[0x04, 0x02]);
+        with_pubkeys_tag.extend_from_slice(&[0xBBu8; 32]);
+        with_pubkeys_tag.extend_from_slice(&[0xCCu8; 32]);
+        let mut padded = with_pubkey.clone();
+        padded.splice(0..0, [0u8, 0u8]);
+        let bare = hex::decode(build_bare_tx_extra_hex(&root)).unwrap();
+        let bodies: Vec<Vec<u8>> = vec![
+            with_pubkey,
+            with_pubkeys_tag,
+            padded,
+            bare,
+            hex::decode(build_tx_extra_hex_for(&root, MERKLE_V1)).unwrap(),
+        ];
+        for body in &bodies {
+            // Truncations: never panic. Many are legal (padding and
+            // trailing unknowns tolerate shortening), so no Ok assert.
+            for len in 0..body.len() {
+                let _ = find_commitments(&body[..len]);
+            }
+            // Single-bit flips: never panic; every accepted commitment
+            // must round trip through the builder exactly.
+            for (i, _) in body.iter().enumerate() {
+                for bit in 0usize..8 {
+                    let mut bad = body.clone();
+                    bad[i] ^= 1 << bit;
+                    if let Ok(found) = find_commitments(&bad) {
+                        for c in found {
+                            let rebuild =
+                                hex::decode(build_tx_extra_hex_for(&c.root, c.merkle_ver)).unwrap();
+                            let mut rebuilt = Vec::with_capacity(rebuild.len() + 2);
+                            rebuilt.extend_from_slice(&[0u8, 0u8]);
+                            rebuilt.extend_from_slice(&rebuild);
+                            let back =
+                                find_commitments(&rebuilt).expect("built payload must parse");
+                            assert!(
+                                back.contains(&c),
+                                "accepted mutant at byte {i} bit {bit} is not round-trip stable"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
 }

@@ -26,10 +26,7 @@ fuzz_target!(|data: &[u8]| {
             padded.extend_from_slice(&[0x00u8, 0x00]);
             padded.extend_from_slice(&raw);
             let back = commitment::find_commitments(&padded).expect("built payload must parse");
-            assert!(
-                back.iter().any(|b| *b == c),
-                "built and parsed commitment must round trip"
-            );
+            assert!(back.contains(&c), "built and parsed commitment must round trip");
         }
     }
 });

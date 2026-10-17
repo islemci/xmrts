@@ -98,11 +98,12 @@ pub(crate) async fn finalize_one(
     if op.txid.is_empty() {
         anyhow::bail!("This pending never sent (no txid). Run `xmrts stamp` again");
     }
-    if !op.relayed {
-        anyhow::bail!(
-            "This pending was never relayed: built with --do-not-relay, or the run ended before the send. Re-run `xmrts stamp` to send it (its txid is the preview hash; repeating an already-broadcast tx is not a double spend - the daemon knows it)"
-        );
-    }
+    // No hard bail on `relayed == false` here: the flag is only demoted
+    // evidence. If the daemon shows this exact tx holding our commitment,
+    // the relay demonstrably happened and a crash merely delayed the flag
+    // flip (the wallet commits the tx to its daemon as part of `relay`).
+    // The chain is the arbiter; the refusal below fires only when the
+    // daemon agrees the tx is absent or carries no mark.
     let root: [u8; 32] = hex::decode(&op.root)
         .context("Pending file holds a bad root")?
         .try_into()
@@ -138,8 +139,19 @@ pub(crate) async fn finalize_one(
     .await;
     super::ui::abandon(&bar);
     let height = height.map_err(|e| {
-        anyhow::anyhow!("Not ready yet: {e}. A tx that never appears may have been dropped; re-stamp if the wallet no longer shows it.")
+        if !op.relayed {
+            anyhow::anyhow!(
+                "This pending was never relayed: built with --do-not-relay, or the run ended before the send (the daemon cannot see the marked tx: {e}). Re-run `xmrts stamp` to send it (its txid is the preview hash; repeating an already-broadcast tx is not a double spend - the daemon knows it)"
+            )
+        } else {
+            anyhow::anyhow!("Not ready yet: {e}. A tx that never appears may have been dropped; re-stamp if the wallet no longer shows it.")
+        }
     })?;
+    if !op.relayed {
+        super::ui::warn(
+            "The record says never routed, but the daemon holds this tx and its mark: a crash apparently landed between the send and the flag update. The chain outranks the flag; continuing.",
+        );
+    }
     super::ui::ok(&format!("Tx {} sits in block {height}.", op.txid));
     super::ui::ok("Chain holds your mark.");
     // H2: never write zeros. If the hash cannot be fetched, stay pending.

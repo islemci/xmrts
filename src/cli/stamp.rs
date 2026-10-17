@@ -524,7 +524,9 @@ pub async fn run_inner(args: &StampArgs, verbose: bool, stagenet: bool) -> Resul
             }
         })?;
         if let Err(e) = pending::update_txid(&pending_path, &h) {
-            super::ui::warn(&format!("Relayed but pending record update failed: {e}"));
+            super::ui::warn(&format!(
+                "Relayed but the pending record update failed: {e}. The recover path holds: `finalize` judges the record from the chain, not from the relayed flag, so it will proceed once the tx shows up."
+            ));
         }
         h
     };

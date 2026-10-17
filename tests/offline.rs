@@ -131,6 +131,7 @@ fn json_output_is_single_line_json() {
             "--out-dir",
             out.to_str().unwrap(),
             "--json",
+            "--yes",
         ])
         .output()
         .unwrap();

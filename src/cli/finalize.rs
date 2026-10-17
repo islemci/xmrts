@@ -100,7 +100,7 @@ pub(crate) async fn finalize_one(
     }
     if !op.relayed {
         anyhow::bail!(
-            "This pending was built with --do-not-relay and never broadcast. Re-run `xmrts stamp` without --do-not-relay"
+            "This pending was never relayed: built with --do-not-relay, or the run ended before the send. Re-run `xmrts stamp` to send it (its txid is the preview hash; repeating an already-broadcast tx is not a double spend - the daemon knows it)"
         );
     }
     let root: [u8; 32] = hex::decode(&op.root)

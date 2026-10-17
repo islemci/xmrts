@@ -469,7 +469,11 @@ pub async fn run_inner(args: &StampArgs, verbose: bool, stagenet: bool) -> Resul
             .map(|d| d.to_string_lossy().into_owned()),
         network: network_name.clone(),
         merkle_ver: crate::protocol::merkle::MERKLE_V2,
-        relayed: !args.do_not_relay,
+        // Honesty first: at save time this tx is still a preview. A crash
+        // between save and relay must NOT leave a record claiming a
+        // broadcast that never happened. `pending::update_txid` flips
+        // `relayed` to true in the same atomic write as the final txid.
+        relayed: false,
     })?;
 
     // Machine mode never prompts: `ensure_json_consent` already required

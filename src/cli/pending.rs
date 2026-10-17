@@ -40,10 +40,11 @@ pub struct PendingOp {
     /// predate the field and default to V1.
     #[serde(default = "default_merkle_ver")]
     pub merkle_ver: u8,
-    /// Whether the transaction was actually relayed. `--do-not-relay`
-    /// previews leave this false: the stored txid was never broadcast, so
-    /// `finalize` must refuse to poll it forever. Old pendings predate the
-    /// field and default to true.
+    /// Whether the transaction was actually relayed. Saved as false and
+    /// only flipped true in the same atomic write as the final txid
+    /// (`pending::update_txid`), right after `relay` succeeds: a crash
+    /// between save and relay must not leave a broadcast that never
+    /// happened. Old pendings predate the field and default to true.
     #[serde(default = "default_relayed")]
     pub relayed: bool,
 }
@@ -248,7 +249,7 @@ fn run_list(json: bool) -> Result<()> {
             Ok(op) => {
                 let missing = op.files.iter().filter(|f| !Path::new(f).is_file()).count();
                 let tx = if !op.relayed {
-                    "built locally, never sent (--do-not-relay)"
+                    "never relayed (--do-not-relay or interrupted run)"
                 } else if op.txid.is_empty() {
                     "never sent"
                 } else {
@@ -324,16 +325,19 @@ fn run_clean(yes: bool) -> Result<()> {
     Ok(())
 }
 
-/// Record the relayed txid in the pending file, so a crash between relay
-/// and proof-writing still leaves the files→root→transaction link behind.
-/// Returns an error instead of swallowing it (M3): callers surface it as a
-/// warning.
+/// Record the relayed txid and mark the record as relayed in ONE atomic
+/// write, so a crash in between cannot leave a final txid behind a
+/// `relayed: false` claim (or an honest-looking `relayed: true` for a
+/// tx that was never broadcast - only this function sets true, and it
+/// only runs after `relay` succeeded). Returns an error instead of
+/// swallowing it (M3): callers surface it as a warning.
 pub fn update_txid(path: &Path, txid: &str) -> Result<()> {
     let text =
         std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
     let mut v: serde_json::Value =
         serde_json::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
     v["txid"] = serde_json::Value::String(txid.to_string());
+    v["relayed"] = serde_json::Value::Bool(true);
     let out = serde_json::to_string_pretty(&v)?;
     connection::atomic_write_0600(path, out.as_bytes())?;
     Ok(())

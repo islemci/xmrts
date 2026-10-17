@@ -189,7 +189,7 @@ pub fn run(args: &PendingArgs) -> Result<()> {
     let _ = connection::ensure_dirs();
     match args.command.as_ref().unwrap_or(&PendingCommand::List) {
         PendingCommand::List => run_list(args.json),
-        PendingCommand::Clean { yes } => run_clean(*yes),
+        PendingCommand::Clean { yes } => run_clean(*yes, args.json),
     }
 }
 
@@ -284,7 +284,10 @@ fn run_list(json: bool) -> Result<()> {
     Ok(())
 }
 
-fn run_clean(yes: bool) -> Result<()> {
+fn run_clean(yes: bool, json: bool) -> Result<()> {
+    // Machine mode cannot answer the removal prompt: without --yes the
+    // "Remove N dead record(s)?" bytes would land on the JSON stream.
+    super::stamp::ensure_json_consent(json, yes)?;
     let views = view_all();
     // Cleanable = unreadable, or at least one input file gone (finalize
     // needs every file to recompute the root, so these can never finish).
@@ -304,11 +307,21 @@ fn run_clean(yes: bool) -> Result<()> {
                 views.len()
             ));
         }
+        if json {
+            println!(
+                "{}",
+                serde_json::to_string(&serde_json::json!({"ok": true, "removed": 0})).unwrap()
+            );
+        }
         return Ok(());
     }
-    super::ui::header("◆", "Pending clean");
-    for v in &dead {
-        println!("  {}", v.path.display());
+    if json {
+        // One JSON doc per run: the removal summary prints after the work.
+    } else {
+        super::ui::header("◆", "Pending clean");
+        for v in &dead {
+            println!("  {}", v.path.display());
+        }
     }
     if !yes && !super::ui::confirm(&format!("Remove {} dead record(s)? [y/N] ", dead.len()))? {
         super::ui::note("Stopped. Nothing removed.");
@@ -322,6 +335,15 @@ fn run_clean(yes: bool) -> Result<()> {
         }
     }
     super::ui::ok(&format!("Removed {removed} dead record(s)."));
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string(
+                &serde_json::json!({"ok": removed == dead.len(), "removed": removed})
+            )
+            .unwrap()
+        );
+    }
     Ok(())
 }
 

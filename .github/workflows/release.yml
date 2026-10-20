@@ -155,10 +155,14 @@ jobs:
 
       - name: Attach to release
         if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
-        with:
-          files: dist/*.tar.gz
-          generate_release_notes: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
+            gh release upload "${GITHUB_REF_NAME}" dist/*.tar.gz --clobber
+          else
+            gh release create "${GITHUB_REF_NAME}" dist/*.tar.gz --generate-notes
+          fi
 
   # Keep the Homebrew tap in lockstep with the release: regenerate
   # Formula/xmrts.rb from the published tarball checksums and push.

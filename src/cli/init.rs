@@ -63,6 +63,7 @@ pub fn run(args: &InitArgs) -> Result<()> {
             cfg.wallet_dir = ask_wallet_dir(cfg.wallet_dir.clone())?;
         }
         ask_prices(&mut cfg)?;
+        ask_donate(&mut cfg)?;
     }
 
     // Piped runs (and flag-pinned runs never asked about the folder)
@@ -336,6 +337,32 @@ fn ask_currency(default: &str) -> Result<String> {
             )),
         }
     }
+}
+
+/// Donation question, asked on every interactive `xmrts init`. `y`
+/// turns donations on; Enter or `n` keeps the default off. There is no
+/// flag for it, so every wizard run gets the question.
+fn ask_donate(cfg: &mut WalletConfig) -> Result<()> {
+    super::ui::header(
+        "◆",
+        "Would you like to support the development of the protocol?",
+    );
+    super::ui::hint(
+        "With each transaction, you can send the same amount of fees you are paying to the \
+         xmrts developers, which will help us improve the protocol for everyone!",
+    );
+    super::ui::hint(
+        "Donations are off by default, and they will be the same as the fee you are paying \
+         for each transaction.",
+    );
+    if super::ui::confirm("Donate? [y/N] ")? {
+        cfg.donate = true;
+        super::ui::ok("Donations are on. Every stamp sends a fee to the devs.");
+    } else if cfg.donate {
+        cfg.donate = false;
+        super::ui::note("Donations are off now.");
+    }
+    Ok(())
 }
 
 /// Quiet discovery for piped runs. One hit means use it. Many hits

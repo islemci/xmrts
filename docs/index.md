@@ -63,7 +63,11 @@ cheap fees. Pick a starting point below, or browse the tabs above for the full g
 
 ## Quickstart
 
-**1. Initialize**: creates local config. Pass `--wallet-dir` to enable sidecar management:
+**1. Initialize**: creates local config. On a terminal it asks for the wallet
+RPC path and your wallet folder (Enter keeps the found or saved value),
+about live fiat prices and which currency, and whether you want to support
+the protocol with per-tx donations (that one off by default). Flags answer
+the matching question; pass `--wallet-dir` to enable sidecar management:
 
 ```bash
 xmrts init

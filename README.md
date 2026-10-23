@@ -9,7 +9,7 @@ fees.
 ## Status
 
 ```bash
-xmrts init
+xmrts init                      # RPC, wallet folder, live prices, donations
 xmrts connect
 xmrts stamp file.png
 xmrts stamp a.pdf b.pdf c.pdf   # one tx for the whole batch

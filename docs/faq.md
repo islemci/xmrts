@@ -165,6 +165,15 @@ reveal only that an xmrts user asked for a price at that time. No txid or
 file data is sent. Turn it off with `xmrts setting set price false` if you
 want zero network calls beyond Monero itself.
 
+## What are the donations? Do I have to pay them?
+
+No. Donations are off by default and opt-in with `xmrts setting set donate
+true` (or the question in `xmrts init`). When on, each stamp adds one extra
+output to the same transaction, sized exactly to the fee you are already
+paying, sent to a fixed xmrts address. The extra output costs no additional
+fee. Mainnet only. Because the address is fixed, donors are recognizable
+on-chain, so leave it off if that matters for your stamps.
+
 ## How do I stamp release artifacts from CI?
 
 Use the GitHub Action with a dedicated low-value timestamping wallet (never

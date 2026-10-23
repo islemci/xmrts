@@ -6,7 +6,12 @@ mainnet for one invocation. Pass `--stagenet` explicitly every time you mean it.
 
 ## `init`
 
-Create local config and point xmrts at your tools.
+Create local config and point xmrts at your tools. On a terminal it walks the
+setup in four short steps: the `monero-wallet-rpc` path, the wallet folder,
+live fiat prices (plus currency), and per-transaction donations. Every
+question takes Enter, and Enter keeps the saved or found value, so pressing
+Enter through it changes nothing. A flag answers its matching question
+instead. Scripts and pipes keep the prompt-free steps.
 
 ```bash
 xmrts init
@@ -20,6 +25,20 @@ Flags:
 - `--wallet-dir DIR`: wallet folder passed to the sidecar. Setting this turns on sidecar control.
 - `--wallet-rpc-path PATH`: path to the `monero-wallet-rpc` binary. Unset means autodetect next to xmrts, in `/opt/monero`, or on `PATH`.
 - `--force`: overwrite saved settings with defaults.
+
+The folder question lists discovered folders (`1` to `N`) plus typed entry
+(`t`), and typed paths expand a leading `~` to your home folder. Declining
+all answers leaves sidecar control off: `xmrts connect` covers that case.
+
+Every wizard run then asks about live prices. `y` turns fiat estimates on
+and asks which currency (a pick list plus any 3-letter fiat code); Enter
+keeps them off. Enabling means one third-party request per estimate:
+prices come from CoinGecko, and a feed outage degrades cleanly to
+XMR-only amounts.
+
+Last, it asks whether you want to support the development of the protocol.
+`y` turns donations on (`setting donate true`), Enter keeps them off.
+Donations are off by default.
 
 ## `connect`
 
@@ -80,6 +99,11 @@ Flags:
 - `--daemon URL`: daemon address for chain checks, like `http://127.0.0.1:18081`.
 - `--min-confirmations N`: required confirmations before proofs count as anchored (default 10). Lower (e.g. 2) anchors in minutes but dies on shallow reorgs. Higher (e.g. 20+) is safer for high-value timestamps.
 - `--sign-with KEY`: GPG-sign each file first (detached `.sig` next to it) and stamp the signatures in the same batch, binding authorship to the timestamp. Takes a GPG key id.
+
+When `donate` is on (`xmrts init` or `setting set donate true`), the
+transaction carries an extra output to the xmrts developers, sized exactly
+to the fee you pay. It rides in the same transaction, so nothing changes
+for verification. Mainnet only.
 
 ## `verify`
 
@@ -236,7 +260,7 @@ xmrts setting unset daemon
 Subcommands:
 
 - `setting list`: show all settings (password stays hidden).
-- `setting get NAME`: show one setting. Names: `price`, `autoclose`, `currency`, `endpoint`, `daemon`, `network`, `wallet-dir`, `wallet-rpc-path`, `username`, `proxy`, `commitment`.
+- `setting get NAME`: show one setting. Names: `price`, `autoclose`, `donate`, `currency`, `endpoint`, `daemon`, `network`, `wallet-dir`, `wallet-rpc-path`, `username`, `proxy`, `commitment`.
 - `setting set NAME VALUE`: change one setting.
 - `setting unset NAME`: clear an optional setting. Names: `currency`, `daemon`, `wallet-dir`, `wallet-rpc-path`, `username`, `proxy`, `commitment`.
 

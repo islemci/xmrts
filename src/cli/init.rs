@@ -62,6 +62,7 @@ pub fn run(args: &InitArgs) -> Result<()> {
             wizard_took_dir = true;
             cfg.wallet_dir = ask_wallet_dir(cfg.wallet_dir.clone())?;
         }
+        ask_prices(&mut cfg)?;
     }
 
     // Piped runs (and flag-pinned runs never asked about the folder)
@@ -251,6 +252,92 @@ fn expand_home(p: &str) -> String {
     p.to_string()
 }
 
+/// Live prices question, asked on every interactive `xmrts init`.
+/// `y` turns fiat estimates on and asks which currency; Enter or `n`
+/// keeps them off. Turning one on here shows the CoinGecko trade-off
+/// (one third-party request per estimate) before the commit.
+fn ask_prices(cfg: &mut WalletConfig) -> Result<()> {
+    super::ui::header("◆", "Live prices");
+    super::ui::hint("Fiat estimates right next to XMR amounts.");
+    super::ui::hint("Prices are provided by CoinGecko.");
+    let wants = if cfg.price {
+        super::ui::field("Price estimates", "on");
+        super::ui::confirm_y("Keep it? [Y/n] ")?
+    } else {
+        super::ui::field("Price estimates", "off");
+        super::ui::confirm("Show them? [y/N] ")?
+    };
+    if !wants {
+        if cfg.price {
+            cfg.price = false;
+            super::ui::note("Price estimates are off now.");
+        }
+        return Ok(());
+    }
+    cfg.currency = Some(ask_currency(
+        cfg.currency
+            .clone()
+            .unwrap_or_else(|| "usd".to_string())
+            .as_str(),
+    )?);
+    cfg.price = true;
+    super::ui::ok(&format!(
+        "Price estimates are on. Amounts also show {}.",
+        cfg.currency
+            .as_deref()
+            .unwrap_or("usd")
+            .to_ascii_uppercase()
+    ));
+    Ok(())
+}
+
+/// Common picked-first currencies for the wizard list. Any 3-letter
+/// fiat code works too: it is typed straight at the same prompt.
+const COMMON_CURRENCIES: [&str; 8] = ["usd", "eur", "gbp", "jpy", "chf", "cad", "aud", "cny"];
+
+/// Resolve one currency pick. `None` means re-ask. Digits pick from
+/// [`COMMON_CURRENCIES`], empty takes the default, and any 3-letter
+/// alphabetic code passes the same validation as `setting set currency`.
+fn resolve_currency(answer: &str, default: &str) -> Option<String> {
+    let t = answer.trim().to_ascii_lowercase();
+    match t.as_str() {
+        "" => Some(default.to_string()),
+        n => {
+            if let Ok(k) = n.parse::<usize>() {
+                if (1..=COMMON_CURRENCIES.len()).contains(&k) {
+                    return Some(COMMON_CURRENCIES[k - 1].to_string());
+                }
+            }
+            if crate::wallet::price::is_valid_currency(&t) {
+                return Some(t);
+            }
+            None
+        }
+    }
+}
+
+/// Ask which fiat currency amounts should show. Enter keeps the saved
+/// default; typed codes are lowercase before saving.
+fn ask_currency(default: &str) -> Result<String> {
+    super::ui::field("Currency", default);
+    for (i, c) in COMMON_CURRENCIES.iter().enumerate() {
+        println!("  [{}] {c}", i + 1);
+    }
+    loop {
+        let t = super::ui::ask_line(&format!(
+            "Pick 1 to {}, or type your own code (Enter for {default}): ",
+            COMMON_CURRENCIES.len()
+        ))?;
+        match resolve_currency(&t, default) {
+            Some(c) => return Ok(c),
+            None => super::ui::note(&format!(
+                "Answer with 1 to {}, a 3-letter fiat code, or Enter.",
+                COMMON_CURRENCIES.len()
+            )),
+        }
+    }
+}
+
 /// Quiet discovery for piped runs. One hit means use it. Many hits
 /// means a plain list and a hint, no prompts.
 fn pick_wallet_dir() -> Option<String> {
@@ -285,7 +372,7 @@ fn pick_wallet_dir() -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::expand_home;
+    use super::{expand_home, resolve_currency};
 
     #[test]
     fn expand_home_only_touches_tilde_leading_paths() {
@@ -299,5 +386,21 @@ mod tests {
         assert_eq!(expand_home("wallets"), "wallets");
         // A tilde mid-path is a normal path fragment, not a home alias.
         assert_eq!(expand_home("a/~b"), "a/~b");
+    }
+
+    #[test]
+    fn currency_picks_resolve() {
+        // Empty takes the default; digits map onto the list.
+        assert_eq!(resolve_currency("", "eur").as_deref(), Some("eur"));
+        assert_eq!(resolve_currency("2", "usd").as_deref(), Some("eur"));
+        assert_eq!(resolve_currency("8", "usd").as_deref(), Some("cny"));
+        // Typed codes pass the same validation, lowercase included.
+        assert_eq!(resolve_currency("JPY", "usd").as_deref(), Some("jpy"));
+        // Out-of-range digits, multi-letter junk and wrong lengths re-ask.
+        assert!(resolve_currency("9", "usd").is_none());
+        assert!(resolve_currency("0", "usd").is_none());
+        assert!(resolve_currency("zz", "usd").is_none());
+        assert!(resolve_currency("jpyy", "usd").is_none());
+        assert!(resolve_currency("j5y", "usd").is_none());
     }
 }

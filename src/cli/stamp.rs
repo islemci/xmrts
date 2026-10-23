@@ -411,12 +411,32 @@ pub async fn run_inner(args: &StampArgs, verbose: bool, stagenet: bool) -> Resul
         );
     }
 
+    // Donations ride in the stamp tx as a fee-sized developer output,
+    // matched exactly to the fee via a do_not_relay rebuild. The
+    // donation address is mainnet; other networks skip it.
+    let donate = cfg.donate && network_name == "mainnet";
+    if cfg.donate && !donate {
+        super::ui::note("Donations are on, but they apply to mainnet only. Skipping this run.");
+    }
+
     let fee_bar = super::ui::spinner("Checking fee...");
-    let previewed =
+    let previewed = if donate {
+        transaction::preview_timestamp_with_donation(
+            &client,
+            &address,
+            args.amount,
+            &extra_hex,
+            args.priority,
+            transaction::DONATION_ADDRESS,
+        )
+        .await
+    } else {
         transaction::preview_timestamp(&client, &address, args.amount, &extra_hex, args.priority)
-            .await;
+            .await
+            .map(|(res, tx)| (res, 0u64, tx))
+    };
     super::ui::abandon(&fee_bar);
-    let (preview, tx_hex) = previewed.map_err(|e| {
+    let (preview, donation, tx_hex) = previewed.map_err(|e| {
         let msg = e.to_string();
         // `transfer` needs the wallet's own daemon link (decoy outputs).
         // "Failed to get height" means the sidecar cannot reach its daemon:
@@ -430,17 +450,37 @@ pub async fn run_inner(args: &StampArgs, verbose: bool, stagenet: bool) -> Resul
             anyhow::anyhow!("Wallet said no: {e}")
         }
     })?;
-    // One price fetch per run: the fee is known once, so both the quote
-    // and the "Fee paid" line share it instead of calling CoinGecko twice.
+    // One price fetch per run: the fee is known once, so the quote, the
+    // "Fee" line and the donation line share it instead of calling
+    // CoinGecko again (the donation is exactly the fee).
     let fee_fiat = super::ui::fiat_for(preview.fee, &cfg).await;
     super::ui::field(
         "Fee",
         &super::ui::with_fiat(&transaction::format_xmr(preview.fee), fee_fiat.clone()),
     );
-    if unlocked < args.amount.saturating_add(preview.fee) {
+    if donation > 0 {
+        super::ui::field(
+            "Donation to xmrts devs",
+            &super::ui::with_fiat(&transaction::format_xmr(donation), fee_fiat.clone()),
+        );
+        super::ui::field(
+            "Donation address",
+            &super::ui::short_address(transaction::DONATION_ADDRESS),
+        );
+    }
+    if unlocked
+        < args
+            .amount
+            .saturating_add(preview.fee)
+            .saturating_add(donation)
+    {
         anyhow::bail!(
-            "Not enough unlocked funds: need {} (amount + fee) but only {} is unlocked. Wait for outputs to unlock (10 blocks) or lower --amount.",
-            transaction::format_xmr(args.amount.saturating_add(preview.fee)),
+            "Not enough unlocked funds: need {} (amount + fee + donation) but only {} is unlocked. Wait for outputs to unlock (10 blocks) or lower --amount.",
+            transaction::format_xmr(
+                args.amount
+                    .saturating_add(preview.fee)
+                    .saturating_add(donation)
+            ),
             transaction::format_xmr(unlocked)
         );
     }
@@ -687,6 +727,7 @@ pub async fn run_inner(args: &StampArgs, verbose: bool, stagenet: bool) -> Resul
                 "block_height": height,
                 "root": hex::encode(root),
                 "network": network_name,
+                "donation": donation,
                 "proofs": proofs.iter().map(|p| p.display().to_string()).collect::<Vec<_>>(),
             }))
             .unwrap()

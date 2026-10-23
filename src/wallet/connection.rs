@@ -69,6 +69,12 @@ pub struct WalletConfig {
     /// Defaults to USD when unset.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub currency: Option<String>,
+    /// Send a developer donation equal to the transaction fee with each
+    /// stamp (`setting set donate true`, or `y` at `xmrts init`). Off by
+    /// default. The donation rides in the same transaction as the
+    /// timestamp self-send; mainnet only.
+    #[serde(default)]
+    pub donate: bool,
 }
 
 fn default_network() -> String {
@@ -94,6 +100,7 @@ impl Default for WalletConfig {
             proxy: None,
             autoclose: default_autoclose(),
             commitment: None,
+            donate: false,
         }
     }
 }

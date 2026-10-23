@@ -30,8 +30,8 @@ pub enum SettingCommand {
     List,
     /// Show one setting.
     Get {
-        /// Name: price, autoclose, currency, endpoint, daemon, network,
-        /// wallet-dir, wallet-rpc-path, username, proxy, commitment
+        /// Name: price, autoclose, donate, currency, endpoint, daemon,
+        /// network, wallet-dir, wallet-rpc-path, username, proxy, commitment
         key: String,
     },
     /// Change one setting.
@@ -52,6 +52,7 @@ fn describe(cfg: &WalletConfig, key: &str) -> Result<String> {
     Ok(match key {
         "price" => cfg.price.to_string(),
         "autoclose" => cfg.autoclose.to_string(),
+        "donate" => cfg.donate.to_string(),
         "currency" => cfg.currency.clone().unwrap_or_else(|| "usd".to_string()),
         // URLs may carry embedded credentials: redact them for display.
         "endpoint" => connection::display_url(&cfg.endpoint),
@@ -94,6 +95,11 @@ fn apply_set(cfg: &mut WalletConfig, key: &str, value: &str) -> Result<()> {
         "autoclose" => {
             cfg.autoclose = value.parse().map_err(|_| {
                 anyhow::anyhow!("Autoclose wants true or false. Got '{value}'")
+            })?;
+        }
+        "donate" => {
+            cfg.donate = value.parse().map_err(|_| {
+                anyhow::anyhow!("Donate wants true or false. Got '{value}'")
             })?;
         }
         "currency" => {
@@ -155,7 +161,7 @@ fn apply_unset(cfg: &mut WalletConfig, key: &str) -> Result<()> {
         }
         "proxy" => cfg.proxy = None,
         "commitment" => cfg.commitment = None,
-        "price" | "endpoint" | "network" | "autoclose" => {
+        "price" | "endpoint" | "network" | "autoclose" | "donate" => {
             anyhow::bail!("'{key}' must stay set. Cannot clear it")
         }
         _ => anyhow::bail!("Unknown setting '{key}'. Try `xmrts setting list`"),
@@ -172,6 +178,7 @@ pub fn run(args: &SettingArgs) -> Result<()> {
             for key in [
                 "price",
                 "autoclose",
+                "donate",
                 "currency",
                 "endpoint",
                 "daemon",
@@ -229,6 +236,9 @@ mod tests {
         assert!(apply_set(&mut cfg, "autoclose", "maybe").is_err());
         apply_set(&mut cfg, "autoclose", "false").unwrap();
         assert!(!cfg.autoclose);
+        assert!(apply_set(&mut cfg, "donate", "sometimes").is_err());
+        apply_set(&mut cfg, "donate", "true").unwrap();
+        assert!(cfg.donate);
         assert!(apply_set(&mut cfg, "commitment", "rot13").is_err());
         apply_set(&mut cfg, "commitment", "magic").unwrap();
         assert_eq!(cfg.commitment.as_deref(), Some("magic"));

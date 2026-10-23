@@ -19,3 +19,6 @@
 # Patch/diff leftovers
 *.orig
 *.rej
+
+# Reported findings from static analysis tools
+FINDINGS.md

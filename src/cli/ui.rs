@@ -239,6 +239,28 @@ pub fn confirm(prompt: &str) -> anyhow::Result<bool> {
     }
 }
 
+/// Yes or no prompt with one keypress where Enter already means yes.
+/// Use for keep questions: the current state holds unless `n` is typed.
+/// Print the prompt as is, like `"Keep it? [Y/n] "`.
+pub fn confirm_y(prompt: &str) -> anyhow::Result<bool> {
+    use std::io::Write;
+    print!("{prompt}");
+    std::io::stdout().flush()?;
+    Ok(!matches!(read_key(), Some('n') | Some('N')))
+}
+
+/// Read one typed line. The prompt goes to stdout and the answer is
+/// trimmed. Piped stdin works too, so callers still gate prompts on
+/// [`is_interactive`] when a terminal is required.
+pub fn ask_line(prompt: &str) -> anyhow::Result<String> {
+    use std::io::Write;
+    print!("{prompt}");
+    std::io::stdout().flush()?;
+    let mut line = String::new();
+    std::io::stdin().read_line(&mut line)?;
+    Ok(line.trim().to_string())
+}
+
 /// Numbered choice with one keypress (`1` to `9`). Enter picks `default`.
 /// Keeps asking until the key is valid. Lists longer than 9 entries read a
 /// full line so two-digit picks work.

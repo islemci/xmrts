@@ -84,7 +84,7 @@ if [ "$ACTUAL_COMMIT" != "$EXPECTED_COMMIT" ]; then
   exit 1
 fi
 echo "monero $TAG verified at $ACTUAL_COMMIT"
-git -C "$WORK" submodule update --init --force
+git -C "$WORK" submodule update --init --force --depth 1
 
 # On macOS the depends tree targets an old deployment version; without
 # an explicit SDK the modern linker cannot find system libraries.
@@ -159,6 +159,12 @@ grep -E "\(package\)_(version|sha256_hash)=" "$ZMQ_MK"
 cp "$SCRIPT_DIR/../patches/zeromq-4.3.5-missing-braces.patch" \
   "$WORK/contrib/depends/patches/zeromq/06aba27b04c5822cb88a69677382a0f053367143.patch"
 
+# Prefer Ninja when available: much faster incremental builds than Make.
+if command -v ninja >/dev/null 2>&1; then
+  CMAKE_GEN="-G Ninja"
+else
+  CMAKE_GEN=""
+fi
 if [ "$MODE" = "static" ]; then
   NPROC="$(nproc 2>/dev/null || sysctl -n hw.ncpu)"
   TOOLCHAIN="$WORK/contrib/depends/$TRIPLE/share/toolchain.cmake"
@@ -167,13 +173,13 @@ if [ "$MODE" = "static" ]; then
   else
     make -C "$WORK/contrib/depends" -j"$NPROC" "HOST=$TRIPLE"
   fi
-  cmake -S "$WORK" -B "$WORK/build/release" \
+  cmake $CMAKE_GEN -S "$WORK" -B "$WORK/build/release" \
     -DCMAKE_BUILD_TYPE=Release \
     -DBUILD_GUI_DEPS=0 \
     -DUSE_CCACHE=1 \
     "-DCMAKE_TOOLCHAIN_FILE=$TOOLCHAIN"
 else
-  cmake -S "$WORK" -B "$WORK/build/release" \
+  cmake $CMAKE_GEN -S "$WORK" -B "$WORK/build/release" \
     -DCMAKE_BUILD_TYPE=Release \
     -DBUILD_GUI_DEPS=0 \
     -DUSE_CCACHE=1

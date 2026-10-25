@@ -45,7 +45,7 @@ jobs:
       - name: System deps (Linux)
         run: >
           sudo apt-get update &&
-          sudo apt-get install -y build-essential cmake pkg-config
+          sudo apt-get install -y build-essential cmake ninja-build pkg-config
           autoconf automake libtool curl git python3 ccache gperf
           autotools-dev bsdmainutils unzip ca-certificates libtinfo5
 

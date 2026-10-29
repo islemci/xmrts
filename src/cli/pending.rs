@@ -454,9 +454,8 @@ mod tests {
         for n in 2..=1001u32 {
             std::fs::write(dir.path().join(format!("p-{n}.json")), b"x").unwrap();
         }
-        let err = next_free_path(dir.path(), "p")
-            .err()
-            .expect("exhausted directory must fail, not spin");
+        let err =
+            next_free_path(dir.path(), "p").expect_err("exhausted directory must fail, not spin");
         assert!(err.to_string().contains("1000"), "unexpected error: {err}");
     }
 }

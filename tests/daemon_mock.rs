@@ -151,6 +151,54 @@ fn rx(root_hex: &str) -> String {
         .to_lowercase()
 }
 
+/// A redirecting endpoint: every request — regardless of path — answers
+/// 302 with a same-server Location. Counts hits so tests can assert a
+/// redirect did NOT generate a follow-up request.
+async fn start_redirect_mock(hits: std::sync::Arc<std::sync::atomic::AtomicUsize>) -> String {
+    use std::sync::atomic::Ordering;
+    use tokio::io::AsyncWriteExt;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        loop {
+            let Ok((mut sock, _)) = listener.accept().await else {
+                break;
+            };
+            hits.fetch_add(1, Ordering::SeqCst);
+            let mut buf = vec![0u8; 4096];
+            let _ = tokio::io::AsyncReadExt::read(&mut sock, &mut buf).await;
+            let resp = "HTTP/1.1 302 Found\r\nLocation: /elsewhere\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+            let _ = sock.write_all(resp.as_bytes()).await;
+        }
+    });
+    format!("http://127.0.0.1:{}", addr.port())
+}
+
+/// A 30x from a daemon endpoint must fail closed: the transport policy is
+/// no-redirects, so the response must surface as an error and NOT be
+/// followed with a second request (which would replay the POST — the
+/// marked-commitment queries — to the Location). This also guards the
+/// failure path of the policy client: substituting a default
+/// `reqwest::Client::new()` would follow here and produce >1 hit.
+#[tokio::test]
+async fn daemon_redirect_is_refused_not_followed() {
+    use std::sync::atomic::Ordering;
+    let hits = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let endpoint = start_redirect_mock(hits.clone()).await;
+    let client = xmrts::wallet::daemon::DaemonClient::new(&endpoint)
+        .expect("policy client builds on loopback");
+    let result = client.tx_extra(&hex::encode([0x11u8; 32])).await;
+    assert!(
+        result.is_err(),
+        "a redirecting daemon must error, not hand back a 302 body: {result:?}"
+    );
+    assert_eq!(
+        hits.load(Ordering::SeqCst),
+        1,
+        "redirect must not be followed (exactly one request expected)"
+    );
+}
+
 async fn setup() -> (String, String, [u8; 32], [u8; 32]) {
     // Returns (endpoint, txid_hex, root, block_hash).
     // Mock follows real monerod semantics: `get_info.height` is the chain

@@ -676,14 +676,21 @@ mod tests {
 
     #[test]
     fn endpoint_validation_error_redacts_credentials() {
-        let mut cfg = WalletConfig::default();
-        cfg.endpoint = "stamp:topsecretpw@host:18081".to_string();
-        let err = cfg.validate().err().expect("missing scheme must fail");
+        let err = WalletConfig {
+            endpoint: "stamp:topsecretpw@host:18081".to_string(),
+            ..WalletConfig::default()
+        }
+        .validate()
+        .expect_err("missing scheme must fail");
         assert!(!err.to_string().contains("topsecretpw"));
         assert!(!err.to_string().contains("stamp:"));
-        cfg.endpoint = "http://127.0.0.1:18082".to_string();
-        cfg.daemon_endpoint = Some("node:hunter2@example:18081".to_string());
-        let err = cfg.validate().err().expect("daemon must fail");
+        let err = WalletConfig {
+            endpoint: "http://127.0.0.1:18082".to_string(),
+            daemon_endpoint: Some("node:hunter2@example:18081".to_string()),
+            ..WalletConfig::default()
+        }
+        .validate()
+        .expect_err("daemon must fail");
         assert!(!err.to_string().contains("hunter2"));
         assert!(!err.to_string().contains("node:"));
     }

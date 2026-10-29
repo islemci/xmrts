@@ -44,6 +44,8 @@ pub enum DaemonError {
     NotFound { txid: String },
     #[error("bad daemon response: {0}")]
     Malformed(String),
+    #[error("cannot build HTTP client for daemon traffic: {0}")]
+    ClientBuild(String),
     #[error("no XMRST commitment for this root in transaction {txid}")]
     CommitmentAbsent { txid: String },
     #[error("transaction {txid} is not yet confirmed (still in mempool)")]
@@ -88,19 +90,32 @@ pub struct DaemonClient {
 }
 
 impl DaemonClient {
-    pub fn new(endpoint: impl Into<String>) -> Self {
+    pub fn new(endpoint: impl Into<String>) -> Result<Self, DaemonError> {
         // Daemon calls happen mid-flow (stamp/verify/finalize): a
         // black-holing endpoint must time out, never hang the command.
         // Loopback daemons bypass the proxy; remote daemons use it.
         let endpoint_str: String = endpoint.into();
-        let client = super::connection::http_client_builder_for(Some(&endpoint_str))
-            .timeout(std::time::Duration::from_secs(30))
-            .build()
-            .unwrap_or_else(|_| reqwest::Client::new());
-        Self {
+        let client = Self::policy_client(&endpoint_str)?;
+        Ok(Self {
             endpoint: endpoint_str,
             client,
-        }
+        })
+    }
+
+    /// Build the transport-policy HTTP client for daemon traffic, or fail.
+    ///
+    /// The old fallback — `.unwrap_or_else(|_| reqwest::Client::new())`
+    /// on a builder failure — silently substituted a client that
+    /// **follows redirects** and **ignores the configured proxy**,
+    /// voiding the no-redirect policy (a 30x from a daemon endpoint
+    /// would replay the POST, including the marked-commitment queries)
+    /// and the proxy/Tor guarantee. A builder failure is now a hard
+    /// error; there is no insecure fallback.
+    fn policy_client(endpoint: &str) -> Result<reqwest::Client, DaemonError> {
+        super::connection::http_client_builder_for(Some(endpoint))
+            .timeout(std::time::Duration::from_secs(30))
+            .build()
+            .map_err(|e| DaemonError::ClientBuild(e.to_string()))
     }
 
     /// Fetch (`tx_extra` hex, block height, block timestamp) for a
@@ -169,10 +184,7 @@ pub fn format_block_time(timestamp: u64) -> String {
 /// zeros when unavailable - height is the load-bearing field).
 pub async fn block_hash(daemon_endpoint: &str, height: u64) -> Result<[u8; 32], DaemonError> {
     let url = format!("{}/json_rpc", daemon_endpoint.trim_end_matches('/'));
-    let client = super::connection::http_client_builder_for(Some(daemon_endpoint))
-        .timeout(std::time::Duration::from_secs(30))
-        .build()
-        .unwrap_or_else(|_| reqwest::Client::new());
+    let client = DaemonClient::policy_client(daemon_endpoint)?;
     let resp: serde_json::Value = client
         .post(&url)
         .json(&serde_json::json!({
@@ -209,10 +221,7 @@ pub async fn block_header(
     height: u64,
 ) -> Result<([u8; 32], u64), DaemonError> {
     let url = format!("{}/json_rpc", daemon_endpoint.trim_end_matches('/'));
-    let client = super::connection::http_client_builder_for(Some(daemon_endpoint))
-        .timeout(std::time::Duration::from_secs(30))
-        .build()
-        .unwrap_or_else(|_| reqwest::Client::new());
+    let client = DaemonClient::policy_client(daemon_endpoint)?;
     let resp: serde_json::Value = client
         .post(&url)
         .json(&serde_json::json!({
@@ -293,7 +302,7 @@ pub async fn confirm_commitment_for_version(
     expected_commitment: &[u8; 32],
     expected_merkle_ver: Option<u8>,
 ) -> Result<u64, DaemonError> {
-    let client = DaemonClient::new(daemon_endpoint);
+    let client = DaemonClient::new(daemon_endpoint)?;
     let (extra_hex, height, _) = client.tx_extra(txid_hex).await?;
     if height == 0 {
         return Err(DaemonError::Unconfirmed {
@@ -320,10 +329,7 @@ pub async fn confirm_commitment_for_version(
 /// Daemon `get_info`: returns (nettype, chain height).
 pub async fn get_info(daemon_endpoint: &str) -> Result<(String, u64), DaemonError> {
     let url = format!("{}/json_rpc", daemon_endpoint.trim_end_matches('/'));
-    let client = super::connection::http_client_builder_for(Some(daemon_endpoint))
-        .timeout(std::time::Duration::from_secs(30))
-        .build()
-        .unwrap_or_else(|_| reqwest::Client::new());
+    let client = DaemonClient::policy_client(daemon_endpoint)?;
     let resp: serde_json::Value = client
         .post(&url)
         .json(&serde_json::json!({
@@ -395,7 +401,7 @@ pub async fn verify_anchor_for_version(
     if proof_block_hash == &[0u8; 32] {
         return Err(DaemonError::ZeroBlockHash);
     }
-    let client = DaemonClient::new(daemon_endpoint);
+    let client = DaemonClient::new(daemon_endpoint)?;
     let (extra_hex, chain_height, block_timestamp) = client.tx_extra(txid_hex).await?;
     if chain_height == 0 {
         return Err(DaemonError::Unconfirmed {

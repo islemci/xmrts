@@ -661,8 +661,7 @@ mod tests {
         // A credential-bearing endpoint with a bad port must error, and
         // the error text must redact the userinfo like every other branch.
         let err = parse_endpoint("http://stamp:topsecretpw@127.0.0.1:notaport")
-            .err()
-            .expect("bad port must fail");
+            .expect_err("bad port must fail");
         let text = err.to_string();
         assert!(!text.contains("topsecretpw"));
         assert!(!text.contains("stamp:"));

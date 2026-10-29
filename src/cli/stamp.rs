@@ -74,6 +74,10 @@ pub struct StampArgs {
 
 /// Effective depth gate: `--min-confirmations` or MIN_CONFIRMATIONS.
 /// Rejects 0: a proof buried zero deep proves nothing about time.
+/// Average minutes a Monero block takes; display-only estimate, so the
+/// multiplication saturates rather than wrapping at extreme values.
+const EST_MINUTES_PER_BLOCK: u64 = 2;
+
 pub(crate) fn resolve_min_confirmations(opt: Option<u64>) -> Result<u64> {
     match opt {
         Some(0) => anyhow::bail!("--min-confirmations must be at least 1."),
@@ -606,7 +610,7 @@ pub async fn run_inner(args: &StampArgs, verbose: bool, stagenet: bool) -> Resul
     } else {
         super::ui::note(&format!(
             "Monero averages a block every ~2 minutes; anchoring needs {min_conf} confirmation(s) (~{} minutes).",
-            min_conf * 2
+            min_conf.saturating_mul(EST_MINUTES_PER_BLOCK)
         ));
         super::ui::hint(
             "Ctrl-C is safe here: the pending record is saved, resume with `xmrts finalize`.",

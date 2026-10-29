@@ -549,7 +549,9 @@ pub async fn run_inner(args: &StampArgs, verbose: bool, stagenet: bool) -> Resul
     // Machine mode never prompts: `ensure_json_consent` already required
     // --yes when --json, so interactive consent is the only remaining path.
     if !args.yes && !super::ui::confirm("Send now? [y/N] ")? {
-        let _ = std::fs::remove_file(&pending_path);
+        if let Err(e) = std::fs::remove_file(&pending_path) {
+            tracing::debug!(error = %e, "could not remove pending record");
+        }
         super::ui::note("Stopped. No funds spent. Nothing published.");
         if args.json {
             println!(
@@ -570,7 +572,9 @@ pub async fn run_inner(args: &StampArgs, verbose: bool, stagenet: bool) -> Resul
         let h = transaction::relay(&client, &tx_hex).await.map_err(|e| {
             // Nothing was broadcast, so the preview txid in the pending
             // record would poison `finalize` forever. Drop the record.
-            let _ = std::fs::remove_file(&pending_path);
+            if let Err(e) = std::fs::remove_file(&pending_path) {
+            tracing::debug!(error = %e, "could not remove pending record");
+        }
             let msg = e.to_string();
             // Relay commits through the wallet's own daemon link. A stale
             // or unreachable daemon fails the commit even though the
@@ -726,7 +730,9 @@ pub async fn run_inner(args: &StampArgs, verbose: bool, stagenet: bool) -> Resul
         args.out_dir.as_deref(),
     )?;
     if height > 0 {
-        let _ = std::fs::remove_file(&pending_path);
+        if let Err(e) = std::fs::remove_file(&pending_path) {
+            tracing::debug!(error = %e, "could not remove pending record");
+        }
         super::stats::record(&super::stats::HistoryEntry {
             txid: hex::encode(txid_bytes),
             fee: preview.fee,

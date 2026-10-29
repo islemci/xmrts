@@ -219,7 +219,9 @@ pub(crate) async fn finalize_one(
         &block_hash,
         out_dir.as_deref(),
     )?;
-    let _ = std::fs::remove_file(pending_path);
+    if let Err(e) = std::fs::remove_file(pending_path) {
+        tracing::debug!(error = %e, "could not remove pending record");
+    }
     super::stats::record(&super::stats::HistoryEntry {
         txid: op.txid.clone(),
         fee: op.fee,

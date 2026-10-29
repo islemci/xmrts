@@ -165,6 +165,7 @@ xmrts audit ./archive --daemon http://127.0.0.1:18081 --json
 Flags:
 
 - Paths (one or more): proof files or folders to audit. Folders are walked for `*.xmrts`.
+- Symlinks: an explicitly named proof file that is a symlink is dereferenced and audited; symlinks encountered while walking a folder are skipped (so a symlink loop cannot resurface the same proof twice). Stamp behaves the same way.
 - `--daemon URL`: daemon address for tx lookup. Repeat for a quorum.
 - `--min-confirmations N`: required confirmations before a proof counts as final (default 10).
 - `--json`: machine-readable JSON on stdout (human lines suppressed).

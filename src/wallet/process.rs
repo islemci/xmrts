@@ -427,16 +427,27 @@ pub async fn status(cfg: &WalletConfig, client: &super::rpc::WalletRpc) -> Sidec
     };
     let Some(pid) = read_pid() else {
         // No pidfile, but something foreign may still hold the port.
-        if let Some(foreign) = find_listener_pid(sidecar.bind_port) {
+        let port = sidecar.bind_port;
+        if let Some(foreign) = tokio::task::spawn_blocking(move || find_listener_pid(port))
+            .await
+            .unwrap_or(None)
+        {
             return SidecarStatus::Unhealthy(foreign);
         }
         return SidecarStatus::Stopped;
     };
-    match process_cmdline(pid) {
+    let cmd = tokio::task::spawn_blocking(move || process_cmdline(pid))
+        .await
+        .unwrap_or(None);
+    match cmd {
         Some(cmd) if cmdline_matches(&cmd, sidecar.bind_port) => {}
         // Stale pidfile. Check for a foreign holder before saying stopped.
         _ => {
-            if let Some(foreign) = find_listener_pid(sidecar.bind_port) {
+            let port = sidecar.bind_port;
+            if let Some(foreign) = tokio::task::spawn_blocking(move || find_listener_pid(port))
+                .await
+                .unwrap_or(None)
+            {
                 return SidecarStatus::Unhealthy(foreign);
             }
             return SidecarStatus::Stopped;

@@ -50,10 +50,16 @@ pub async fn run(args: &WalletArgs, verbose: bool) -> Result<()> {
             }
             let _ = verbose;
         }
-        WalletCommand::Stop => match process::stop(&cfg) {
-            Ok(msg) => super::ui::ok(&msg),
-            Err(e) => anyhow::bail!("Could not stop helper: {e}"),
-        },
+        WalletCommand::Stop => {
+            let cfg2 = cfg.clone();
+            match tokio::task::spawn_blocking(move || process::stop(&cfg2))
+                .await
+                .unwrap_or_else(|e| Err(process::ProcessError::Config(e.to_string())))
+            {
+                Ok(msg) => super::ui::ok(&msg),
+                Err(e) => anyhow::bail!("Could not stop helper: {e}"),
+            }
+        }
         WalletCommand::Status => print_status(&process::status(&cfg, &client).await, verbose),
         WalletCommand::Open => open_flow(&cfg, &client).await?,
         WalletCommand::Close => close_flow(&client).await?,

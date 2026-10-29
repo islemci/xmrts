@@ -391,48 +391,70 @@ pub fn atomic_write_0600(path: &std::path::Path, bytes: &[u8]) -> std::io::Resul
         ));
     };
     std::fs::create_dir_all(parent)?;
-    let tmp = parent.join(format!(
-        ".tmp-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0)
-    ));
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-        let mut f = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(&tmp)?;
-        f.write_all(bytes)?;
-        f.sync_all()?;
-        drop(f);
-        let _ = std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600));
+    // Retry a few times on a create_new collision (pid+nanos name): a
+    // hostile or stuck directory could otherwise make every write fail.
+    // Anything other than AlreadyExists propagates immediately.
+    let mut last_err = None;
+    for _ in 0..5 {
+        let tmp = parent.join(format!(
+            ".tmp-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        let write_result = (|| -> std::io::Result<()> {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+                let mut f = std::fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .mode(0o600)
+                    .open(&tmp)?;
+                f.write_all(bytes)?;
+                f.sync_all()?;
+                drop(f);
+                let _ = std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600));
+            }
+            #[cfg(not(unix))]
+            {
+                let mut f = std::fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(&tmp)?;
+                f.write_all(bytes)?;
+                f.sync_all()?;
+                drop(f);
+            }
+            if let Err(e) = std::fs::rename(&tmp, path) {
+                let _ = std::fs::remove_file(&tmp);
+                return Err(e);
+            }
+            Ok(())
+        })();
+        match write_result {
+            Ok(()) => {
+                // Best-effort dir fsync so the rename survives a crash.
+                if let Ok(d) = std::fs::File::open(parent) {
+                    let _ = d.sync_all();
+                }
+                return Ok(());
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                last_err = Some(e);
+                continue;
+            }
+            Err(e) => return Err(e),
+        }
     }
-    #[cfg(not(unix))]
-    {
-        let mut f = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&tmp)?;
-        f.write_all(bytes)?;
-        f.sync_all()?;
-        drop(f);
-    }
-    if let Err(e) = std::fs::rename(&tmp, path) {
-        // Do not leave the temp file behind on rename failure (e.g.
-        // cross-device move, permission denied): best-effort cleanup.
-        let _ = std::fs::remove_file(&tmp);
-        return Err(e);
-    }
-    // Best-effort dir fsync so the rename survives a crash.
-    if let Ok(d) = std::fs::File::open(parent) {
-        let _ = d.sync_all();
-    }
-    Ok(())
+    Err(last_err.unwrap_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::AlreadyExists,
+            "temp file name collision",
+        )
+    }))
 }
 
 pub fn load_config() -> WalletConfig {

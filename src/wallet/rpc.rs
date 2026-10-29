@@ -394,6 +394,17 @@ fn digest_auth_header_with_cnonce(
     };
     let realm = get("realm")?;
     let nonce = get("nonce")?;
+    // These values are copied into a quoted header. A `"`, `\`, or control
+    // character lets a hostile challenge (or a hostile username) break out
+    // of the quotes or inject a new header line. Reject instead of echoing.
+    if !quoted_digest_field_ok(username)
+        || !quoted_digest_field_ok(realm)
+        || !quoted_digest_field_ok(nonce)
+        || !quoted_digest_field_ok(uri)
+        || !quoted_digest_field_ok(cnonce)
+    {
+        return None;
+    }
     let qop: Option<&str> = get("qop").and_then(|q| {
         q.split(',')
             .map(str::trim)
@@ -454,9 +465,23 @@ fn digest_auth_header_with_cnonce(
         h.push('"');
     }
     if let Some(o) = opaque {
+        if !quoted_digest_field_ok(o) {
+            return None;
+        }
         h.push_str(&format!(", opaque=\"{o}\""));
     }
     Some(h)
+}
+
+/// True when `value` can sit inside a Digest quoted-string with no escaping.
+/// Commas are allowed (they stay inside the quotes). Quotes, backslashes,
+/// and control characters are not: those are how a challenge smuggles a
+/// second directive or a new header line.
+fn quoted_digest_field_ok(value: &str) -> bool {
+    !value.is_empty()
+        && !value
+            .chars()
+            .any(|c| c == '"' || c == '\\' || c.is_control())
 }
 
 /// Parse `key="value", key=value, ...` pairs; commas inside quotes do not
@@ -570,6 +595,33 @@ mod tests {
             message: "connection refused".to_string(),
         };
         assert!(!down.is_auth_failure());
+    }
+
+    #[test]
+    fn rejects_header_breaking_challenge_fields() {
+        let answer = |challenge: &str, username: &str| {
+            digest_auth_header_with_cnonce(
+                "POST",
+                "/json_rpc",
+                challenge,
+                username,
+                "p",
+                "abc",
+                None,
+            )
+        };
+        // A comma inside a quoted realm is one field, not a new directive.
+        let comma = answer("Digest realm=\"a,b\", nonce=\"n\", qop=\"auth\"", "user")
+            .expect("comma inside quotes is one field");
+        assert!(comma.contains("realm=\"a,b\""));
+        assert!(!comma.contains("evil="));
+
+        // Quote breakout, backslash, and a smuggled header line are refused.
+        assert!(answer("Digest realm=\"a\\\", evil=\\\"x\", nonce=\"n\"", "user",).is_none());
+        assert!(answer("Digest realm=\"a\\b\", nonce=\"n\"", "user").is_none());
+        assert!(answer("Digest realm=ab\r\nX-Evil: 1, nonce=\"n\"", "user").is_none());
+        assert!(answer("Digest realm=\"r\", nonce=\"n\"", "user\", evil=\"x",).is_none());
+        assert!(answer("Digest realm=\"r\", nonce=\"n\", opaque=\"o\\\"k\"", "user").is_none());
     }
 
     #[test]

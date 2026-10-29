@@ -149,13 +149,14 @@ impl WalletConfig {
         Ok(())
     }
 
-    pub fn client(&self) -> super::rpc::WalletRpc {
+    pub fn client(&self) -> Result<super::rpc::WalletRpc, ConnectionError> {
         super::rpc::WalletRpc::new(
             self.endpoint.clone(),
             self.username.clone(),
             self.password.clone(),
             self.proxy.clone(),
         )
+        .map_err(ConnectionError::Rpc)
     }
 }
 

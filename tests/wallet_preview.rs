@@ -67,7 +67,7 @@ async fn preview_accepts_mark_in_blob_and_metadata() {
     let extra = xmrts::protocol::commitment::build_bare_tx_extra_hex(&[0x42u8; 32]);
     let blob = format!("aabbcc{}ddeeff", extra.to_lowercase());
     let endpoint = start_wallet_mock(tx_result(&blob, &blob)).await;
-    let rpc = xmrts::wallet::rpc::WalletRpc::new(endpoint, None, None, None);
+    let rpc = xmrts::wallet::rpc::WalletRpc::new(endpoint, None, None, None).unwrap();
     let (res, meta) =
         xmrts::wallet::transaction::preview_timestamp(&rpc, "4Adummy", 10_000, &extra, 0)
             .await
@@ -88,7 +88,7 @@ async fn preview_rejects_metadata_without_mark() {
     let blob = format!("aabbcc{}ddeeff", extra.to_lowercase());
     let bare_meta = "aabbccddeeff00112233";
     let endpoint = start_wallet_mock(tx_result(&blob, bare_meta)).await;
-    let rpc = xmrts::wallet::rpc::WalletRpc::new(endpoint, None, None, None);
+    let rpc = xmrts::wallet::rpc::WalletRpc::new(endpoint, None, None, None).unwrap();
     let err = xmrts::wallet::transaction::preview_timestamp(&rpc, "4Adummy", 10_000, &extra, 0)
         .await
         .expect_err("metadata without the mark must fail");
@@ -104,7 +104,7 @@ async fn preview_rejects_blob_without_mark() {
     let extra = xmrts::protocol::commitment::build_bare_tx_extra_hex(&[0x42u8; 32]);
     let bare_blob = "aabbccddeeff00112233";
     let endpoint = start_wallet_mock(tx_result(bare_blob, bare_blob)).await;
-    let rpc = xmrts::wallet::rpc::WalletRpc::new(endpoint, None, None, None);
+    let rpc = xmrts::wallet::rpc::WalletRpc::new(endpoint, None, None, None).unwrap();
     let err = xmrts::wallet::transaction::preview_timestamp(&rpc, "4Adummy", 10_000, &extra, 0)
         .await
         .expect_err("blob without the mark must fail");
@@ -163,7 +163,7 @@ async fn non_json_rpc_answer_reports_status_and_body() {
     // failure: the error should keep the HTTP status and a body snippet
     // so the user sees the endpoint is not (a healthy) wallet RPC.
     let endpoint = start_proxy_error_mock().await;
-    let rpc = xmrts::wallet::rpc::WalletRpc::new(endpoint, None, None, None);
+    let rpc = xmrts::wallet::rpc::WalletRpc::new(endpoint, None, None, None).unwrap();
     let err = rpc
         .get_version()
         .await

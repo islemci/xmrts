@@ -149,7 +149,7 @@ pub async fn run(args: &ConnectArgs, verbose: bool, stagenet: bool) -> Result<()
     super::ui::ok(&format!("Saved to {}", saved.display()));
     super::ui::field("Network", &cfg.network);
 
-    let client = cfg.client();
+    let client = cfg.client().map_err(|e| anyhow::anyhow!("{e}"))?;
     let sidecar_hint = match crate::wallet::process::status(&cfg, &client).await {
         crate::wallet::process::SidecarStatus::Stopped => {
             "\nHelper is set but stopped. Start it:\n\n    xmrts wallet start"

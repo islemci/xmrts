@@ -35,7 +35,7 @@ pub enum WalletCommand {
 pub async fn run(args: &WalletArgs, verbose: bool) -> Result<()> {
     let _ = connection::ensure_dirs();
     let mut cfg = connection::load_config();
-    let client = cfg.client();
+    let client = cfg.client().map_err(|e| anyhow::anyhow!("{e}"))?;
     match &args.command {
         WalletCommand::Start => {
             if cfg.wallet_dir.is_none() {

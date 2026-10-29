@@ -466,7 +466,9 @@ pub async fn start(cfg: &mut WalletConfig) -> Result<u32, ProcessError> {
     // Check before touching config. A live holder stays live, so never
     // regen creds or spawn into an occupied port.
     let _ = resolve(cfg)?;
-    let probe = cfg.client();
+    let probe = cfg
+        .client()
+        .map_err(|e| ProcessError::Config(e.to_string()))?;
     match status(cfg, &probe).await {
         SidecarStatus::Running { pid, .. } => return Ok(pid),
         SidecarStatus::Unhealthy(pid) => {
@@ -499,7 +501,9 @@ pub async fn start(cfg: &mut WalletConfig) -> Result<u32, ProcessError> {
         // stderr: keeps `--json` stdout clean.
         eprintln!("Made fresh RPC login for the sidecar. Saved locally.");
     }
-    let client = cfg.client();
+    let client = cfg
+        .client()
+        .map_err(|e| ProcessError::Config(e.to_string()))?;
     let sidecar = resolve(cfg)?;
     // Write the 0600 login conf BEFORE spawn so `--config-file` points at
     // a live file. The password never touches argv.

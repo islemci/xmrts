@@ -111,7 +111,7 @@ pub async fn run(args: &StampArgs, verbose: bool, stagenet: bool) -> Result<bool
     // `finalize`, `watch` and `verify` never need an open wallet.
     let cfg = connection::load_config();
     if cfg.autoclose && !args.offline {
-        let client = cfg.client();
+        let client = cfg.client().map_err(|e| anyhow::anyhow!("{e}"))?;
         if crate::wallet::rpc::close_wallet(&client).await.is_ok() {
             super::ui::note("Wallet closed. Other apps can open it now.");
         }
@@ -305,7 +305,7 @@ pub async fn run_inner(args: &StampArgs, verbose: bool, stagenet: bool) -> Resul
         return Ok(true);
     }
 
-    let mut client = cfg.client();
+    let mut client = cfg.client().map_err(|e| anyhow::anyhow!("{e}"))?;
     if cfg.wallet_dir.is_none() {
         let found = crate::wallet::discover::discover();
         if found.len() == 1 {
@@ -313,7 +313,7 @@ pub async fn run_inner(args: &StampArgs, verbose: bool, stagenet: bool) -> Resul
             cfg.wallet_dir = Some(d.clone());
             let _ = connection::save_config(&cfg);
             super::ui::ok(&format!("Found wallets in {d}. Using it."));
-            client = cfg.client();
+            client = cfg.client().map_err(|e| anyhow::anyhow!("{e}"))?;
         }
     }
     match crate::wallet::process::status(&cfg, &client).await {
@@ -322,7 +322,7 @@ pub async fn run_inner(args: &StampArgs, verbose: bool, stagenet: bool) -> Resul
             crate::wallet::process::start(&mut cfg)
                 .await
                 .map_err(|e| anyhow::anyhow!("Helper did not start: {e}"))?;
-            client = cfg.client();
+            client = cfg.client().map_err(|e| anyhow::anyhow!("{e}"))?;
             super::ui::ok("Helper is up.");
         }
         crate::wallet::process::SidecarStatus::Unhealthy(pid) => {

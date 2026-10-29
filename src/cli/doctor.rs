@@ -101,7 +101,7 @@ pub async fn run(_args: &DoctorArgs, verbose: bool, stagenet: bool) -> Result<()
             }
         }
     }
-    let client = cfg.client();
+    let client = cfg.client().map_err(|e| anyhow::anyhow!("{e}"))?;
     match crate::wallet::process::resolve(&cfg) {
         Ok(sc) => super::ui::field("Helper binary", &sc.binary.display().to_string()),
         Err(crate::wallet::process::ProcessError::NotConfigured(_)) => {}

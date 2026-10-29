@@ -12,10 +12,14 @@ use thiserror::Error;
 pub enum RpcError {
     #[error("connection failed to {endpoint}: {message}")]
     Connection { endpoint: String, message: String },
+    #[error("wallet RPC rejected authentication at {endpoint}")]
+    Auth { endpoint: String },
     #[error("wallet RPC error {code}: {message}")]
     Server { code: i64, message: String },
     #[error("malformed RPC response: {0}")]
     Malformed(String),
+    #[error("cannot build HTTP client for wallet RPC: {0}")]
+    ClientBuild(String),
     #[error(transparent)]
     Http(#[from] reqwest::Error),
 }
@@ -24,10 +28,7 @@ impl RpcError {
     /// True when the server answered but rejected auth (HTTP 401).
     /// Something listens on the port with a different login than ours.
     pub fn is_auth_failure(&self) -> bool {
-        match self {
-            RpcError::Connection { message, .. } => message.contains("401"),
-            _ => false,
-        }
+        matches!(self, RpcError::Auth { .. })
     }
 }
 
@@ -45,30 +46,29 @@ impl WalletRpc {
         username: Option<String>,
         password: Option<String>,
         proxy: Option<String>,
-    ) -> Self {
+    ) -> Result<Self, RpcError> {
         let endpoint_str: String = endpoint.into();
         let mut builder = Client::builder().timeout(Duration::from_secs(30));
-        // JSON-RPC endpoints do not legitimately redirect. reqwest's
-        // default follows up to 10 hops and re-sends the POST body with
-        // them, so a single hijacked 30x would re-deliver every wallet
-        // command — open_wallet password, transfer params, the tx bytes —
-        // to whatever the Location header names. Fail closed instead.
         builder = builder.redirect(Policy::none());
-        // Never proxy loopback wallet RPC: it can carry the `open_wallet`
-        // password, Tor cannot reach loopback, and a remote proxy operator
-        // must not see local wallet commands.
         if let Some(p) = super::connection::effective_proxy(Some(&endpoint_str), proxy.as_deref()) {
-            if let Ok(proxy) = reqwest::Proxy::all(&p) {
-                builder = builder.proxy(proxy);
+            match reqwest::Proxy::all(&p) {
+                Ok(proxy) => builder = builder.proxy(proxy),
+                Err(e) => tracing::warn!(
+                    proxy = %p,
+                    error = %e,
+                    "saved proxy could not be applied to wallet RPC; traffic goes direct"
+                ),
             }
         }
-        let client = builder.build().expect("reqwest client");
-        Self {
+        let client = builder
+            .build()
+            .map_err(|e| RpcError::ClientBuild(e.to_string()))?;
+        Ok(Self {
             endpoint: endpoint_str,
             client,
             username,
             password,
-        }
+        })
     }
 
     pub fn endpoint(&self) -> &str {
@@ -95,9 +95,8 @@ impl WalletRpc {
         // not accept Basic auth, so there is no point pre-empting with it.
         if resp.status() == reqwest::StatusCode::UNAUTHORIZED {
             let (Some(u), Some(p)) = (self.username.as_deref(), self.password.as_deref()) else {
-                return Err(RpcError::Connection {
+                return Err(RpcError::Auth {
                     endpoint: super::connection::display_url(&self.endpoint),
-                    message: "wallet RPC requires login (HTTP 401) but no username/password is configured; run `xmrts connect --username USER --save-auth`".to_string(),
                 });
             };
             let challenges: Vec<String> = resp
@@ -120,9 +119,8 @@ impl WalletRpc {
                 .await
                 .map_err(conn_err)?;
             if resp.status() == reqwest::StatusCode::UNAUTHORIZED {
-                return Err(RpcError::Connection {
+                return Err(RpcError::Auth {
                     endpoint: super::connection::display_url(&self.endpoint),
-                    message: "wallet RPC rejected the username/password (HTTP 401 even with Digest response)".to_string(),
                 });
             }
         }
@@ -583,11 +581,8 @@ mod tests {
 
     #[test]
     fn flags_auth_failures() {
-        let auth = super::RpcError::Connection {
+        let auth = super::RpcError::Auth {
             endpoint: "http://127.0.0.1:18082".to_string(),
-            message:
-                "wallet RPC rejected the username/password (HTTP 401 even with Digest response)"
-                    .to_string(),
         };
         assert!(auth.is_auth_failure());
         let down = super::RpcError::Connection {

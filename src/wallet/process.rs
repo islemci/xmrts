@@ -537,10 +537,14 @@ pub async fn start(cfg: &mut WalletConfig) -> Result<u32, ProcessError> {
     }
     let child = cmd.spawn()?;
     let pid = child.id();
-    // Intentionally do not wait: the sidecar outlives xmrts. (Unix note:
-    // it shares xmrts's session, so closing the terminal may stop it;
+    // Detach: the sidecar must outlive xmrts. std::process::Child's
+    // Drop does not kill the child unless kill_on_drop(true) was set
+    // (it is not), so a plain drop closes the stdio pipes without
+    // terminating the process. std::mem::forget is unnecessary and
+    // obscures ownership; drop explicitly. (Unix note: it shares
+    // xmrts's session, so closing the terminal may still stop it;
     // run under tmux/a service for permanence.)
-    std::mem::forget(child);
+    drop(child);
     if let Some(pf) = SidecarConfig::pidfile() {
         std::fs::write(pf, pid.to_string())?;
     }

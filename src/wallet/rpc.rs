@@ -600,6 +600,7 @@ mod tests {
                 "/json_rpc",
                 challenge,
                 username,
+                // codeql[rust/hardcoded-credentials]: test fixture, not a real secret
                 "p",
                 "abc",
                 None,

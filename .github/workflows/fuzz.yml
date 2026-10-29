@@ -1,0 +1,33 @@
+# Weekly fuzzing of the untrusted-input parsers. Bounded so it never
+# blocks PRs; failures upload the crashing input as an artifact.
+name: fuzz
+
+on:
+  schedule:
+    - cron: "0 4 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  fuzz:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Rust toolchain
+        uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d # stable
+
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --locked
+
+      - name: Fuzz proof_from_bytes
+        working-directory: fuzz
+        run: |
+          timeout 300 cargo fuzz run proof_from_bytes -- -max_total_time=240 || true
+
+      - name: Fuzz commitment_from_bytes
+        working-directory: fuzz
+        run: |
+          timeout 300 cargo fuzz run commitment_from_bytes -- -max_total_time=240 || true

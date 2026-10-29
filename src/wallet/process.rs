@@ -79,18 +79,34 @@ pub fn candidate_binaries() -> Vec<PathBuf> {
     out
 }
 
+/// True when `path` is an executable file (on Unix: file with any exec
+/// bit set; elsewhere: any regular file).
+#[cfg(unix)]
+fn is_executable(path: &std::path::Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    path.is_file()
+        && std::fs::metadata(path)
+            .map(|m| m.permissions().mode() & 0o111 != 0)
+            .unwrap_or(false)
+}
+
+#[cfg(not(unix))]
+fn is_executable(path: &std::path::Path) -> bool {
+    path.is_file()
+}
+
 /// Resolve `monero-wallet-rpc` to an executable path: explicit config
 /// first, then [`candidate_binaries`].
 pub fn find_binary(explicit: Option<&str>) -> Result<PathBuf, ProcessError> {
     if let Some(p) = explicit {
         let path = PathBuf::from(p);
-        if path.is_file() {
+        if is_executable(&path) {
             return Ok(path);
         }
         return Err(ProcessError::BinaryNotFound(p.to_string()));
     }
     for cand in candidate_binaries() {
-        if cand.components().count() > 1 && cand.is_file() {
+        if cand.components().count() > 1 && is_executable(&cand) {
             return Ok(cand);
         }
         if cand.components().count() == 1 {
@@ -109,13 +125,13 @@ fn find_on_path(name: &Path) -> Option<PathBuf> {
     let file = name.to_str()?;
     for dir in std::env::split_paths(&std::env::var_os("PATH")?) {
         let p = dir.join(file);
-        if p.is_file() {
+        if is_executable(&p) {
             return Some(p);
         }
         #[cfg(windows)]
         {
             let exe = dir.join(format!("{file}.exe"));
-            if exe.is_file() {
+            if is_executable(&exe) {
                 return Some(exe);
             }
         }
@@ -715,6 +731,22 @@ mod tests {
         };
         let shown = clean.redacted_args().join(" ");
         assert!(shown.contains("http://127.0.0.1:18081"));
+    }
+
+    #[test]
+    fn non_executable_candidate_is_rejected() {
+        // A regular (non-executable) file must not be picked up as the
+        // sidecar, even when pointed at explicitly; the spawn would only
+        // fail later with a confusing error.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("monero-wallet-rpc");
+            std::fs::write(&path, b"not really a binary").unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+            assert!(find_binary(Some(path.to_str().unwrap())).is_err());
+        }
     }
 
     #[test]

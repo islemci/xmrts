@@ -195,6 +195,9 @@ pub(crate) async fn finalize_one(
     if recomputed_sorted != stored {
         anyhow::bail!("Files changed since stamp. Cannot finish safely");
     }
+    if recomputed_unique.len() as u64 != tree_size {
+        anyhow::bail!("Tree size changed. Cannot finish safely");
+    }
     let (sorted, tree) = MerkleTree::build_from_unsorted(recomputed_unique)
         .map_err(|e| anyhow::anyhow!("Tree failed: {e}"))?;
     if tree.root() != root {
@@ -216,7 +219,9 @@ pub(crate) async fn finalize_one(
         &block_hash,
         out_dir.as_deref(),
     )?;
-    let _ = std::fs::remove_file(pending_path);
+    if let Err(e) = std::fs::remove_file(pending_path) {
+        tracing::debug!(error = %e, "could not remove pending record");
+    }
     super::stats::record(&super::stats::HistoryEntry {
         txid: op.txid.clone(),
         fee: op.fee,

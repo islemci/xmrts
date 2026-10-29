@@ -12,6 +12,13 @@ use thiserror::Error;
 
 pub const PROOF_MIN_LEN: usize = 165;
 
+/// Sanity cap on the Merkle tree size carried by a proof. Tuned during
+/// fuzz hardening: a tree above this would need > 1e9 leaves, i.e.
+/// tens of gigabytes of input files, which no real timestamping run
+/// produces. Rejecting it early keeps `from_bytes` from allocating
+/// path buffers sized by an attacker-controlled value.
+pub const MAX_TREE_SIZE: u64 = 1_000_000_000;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum Network {
@@ -201,7 +208,7 @@ impl Proof {
         file_hash.copy_from_slice(&bytes[9..41]);
         let leaf_index = u64::from_le_bytes(bytes[41..49].try_into().expect("len"));
         let tree_size = u64::from_le_bytes(bytes[49..57].try_into().expect("len"));
-        if tree_size == 0 || tree_size > 1_000_000_000 {
+        if tree_size == 0 || tree_size > MAX_TREE_SIZE {
             return Err(ProofError::Malformed(format!("bad tree_size {tree_size}")));
         }
         if leaf_index >= tree_size {

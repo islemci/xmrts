@@ -10,6 +10,8 @@ use thiserror::Error;
 pub enum PriceError {
     #[error("price feed unreachable: {0}")]
     Unreachable(String),
+    #[error("cannot build HTTP client for the price feed: {0}")]
+    ClientBuild(String),
     #[error("bad currency code '{0}': want 3 letters, e.g. usd")]
     BadCurrency(String),
     #[error("price feed returned no {0} price for monero")]
@@ -35,10 +37,13 @@ pub async fn xmr_price(currency: &str) -> Result<f64, PriceError> {
     let url =
         format!("https://api.coingecko.com/api/v3/simple/price?ids=monero&vs_currencies={cur}");
     // CoinGecko's firewall rejects requests without a descriptive
-    // User-Agent (HTTP 403), so identify honestly.
+    // User-Agent (HTTP 403), so identify honestly. Builder failure is a
+    // hard error, not a fall back to `reqwest::Client::new()`: that
+    // default client follows redirects and drops the proxy, voiding the
+    // transport policy the shared builder exists to enforce.
     let client = super::connection::http_client_builder()
         .build()
-        .unwrap_or_else(|_| reqwest::Client::new());
+        .map_err(|e| PriceError::ClientBuild(e.to_string()))?;
     let resp: serde_json::Value = client
         .get(&url)
         .header(

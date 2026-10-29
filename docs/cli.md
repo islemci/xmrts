@@ -49,7 +49,8 @@ xmrts connect
 xmrts connect --endpoint http://127.0.0.1:18082
 xmrts connect --daemon http://127.0.0.1:18081
 xmrts connect --network stagenet --daemon http://127.0.0.1:38081
-xmrts connect --username alice --password          # prompts safely
+xmrts connect --username alice --save-auth         # prompts safely
+printf '%s' "$SECRET" | xmrts connect --username alice --password-stdin --save-auth
 xmrts connect --username alice --password s3cret --save-auth
 xmrts connect --clear-auth                          # forget saved login
 ```
@@ -58,8 +59,9 @@ Flags:
 
 - `--endpoint URL`: wallet RPC address, like `http://127.0.0.1:18082`.
 - `--username NAME`: RPC user name (for wallets started with a login).
-- `--password PASS`: RPC password. Prefer omitting it and typing the password when asked. Passing it on the command line exposes it in shell history and the process list.
-- `--save-auth`: save user name and password locally (plain text, locked to you). Needs `--password` together.
+- `--password PASS`: RPC password. Prefer omitting it and typing the password when asked, or piping it with `--password-stdin`. Passing it on the command line exposes it in shell history and the process list.
+- `--password-stdin`: read the RPC password from stdin. One trailing newline is stripped. Needs `--save-auth`. Use this in CI so the secret stays off argv.
+- `--save-auth`: save user name and password locally (plain text, locked to you). Needs `--password`, `--password-stdin`, or the interactive prompt.
 - `--clear-auth`: forget the saved user name and password.
 - `--network NAME`: Monero network: `mainnet`, `testnet`, or `stagenet`.
 - `--daemon URL`: daemon address for checks, like `http://127.0.0.1:18081`.
@@ -163,6 +165,7 @@ xmrts audit ./archive --daemon http://127.0.0.1:18081 --json
 Flags:
 
 - Paths (one or more): proof files or folders to audit. Folders are walked for `*.xmrts`.
+- Symlinks: an explicitly named proof file that is a symlink is dereferenced and audited; symlinks encountered while walking a folder are skipped (so a symlink loop cannot resurface the same proof twice). Stamp behaves the same way.
 - `--daemon URL`: daemon address for tx lookup. Repeat for a quorum.
 - `--min-confirmations N`: required confirmations before a proof counts as final (default 10).
 - `--json`: machine-readable JSON on stdout (human lines suppressed).

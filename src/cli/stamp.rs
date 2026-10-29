@@ -111,7 +111,7 @@ pub async fn run(args: &StampArgs, verbose: bool, stagenet: bool) -> Result<bool
     // `finalize`, `watch` and `verify` never need an open wallet.
     let cfg = connection::load_config();
     if cfg.autoclose && !args.offline {
-        let client = cfg.client();
+        let client = cfg.client().map_err(|e| anyhow::anyhow!("{e}"))?;
         if crate::wallet::rpc::close_wallet(&client).await.is_ok() {
             super::ui::note("Wallet closed. Other apps can open it now.");
         }
@@ -305,7 +305,7 @@ pub async fn run_inner(args: &StampArgs, verbose: bool, stagenet: bool) -> Resul
         return Ok(true);
     }
 
-    let mut client = cfg.client();
+    let mut client = cfg.client().map_err(|e| anyhow::anyhow!("{e}"))?;
     if cfg.wallet_dir.is_none() {
         let found = crate::wallet::discover::discover();
         if found.len() == 1 {
@@ -313,7 +313,7 @@ pub async fn run_inner(args: &StampArgs, verbose: bool, stagenet: bool) -> Resul
             cfg.wallet_dir = Some(d.clone());
             let _ = connection::save_config(&cfg);
             super::ui::ok(&format!("Found wallets in {d}. Using it."));
-            client = cfg.client();
+            client = cfg.client().map_err(|e| anyhow::anyhow!("{e}"))?;
         }
     }
     match crate::wallet::process::status(&cfg, &client).await {
@@ -322,7 +322,7 @@ pub async fn run_inner(args: &StampArgs, verbose: bool, stagenet: bool) -> Resul
             crate::wallet::process::start(&mut cfg)
                 .await
                 .map_err(|e| anyhow::anyhow!("Helper did not start: {e}"))?;
-            client = cfg.client();
+            client = cfg.client().map_err(|e| anyhow::anyhow!("{e}"))?;
             super::ui::ok("Helper is up.");
         }
         crate::wallet::process::SidecarStatus::Unhealthy(pid) => {
@@ -549,13 +549,15 @@ pub async fn run_inner(args: &StampArgs, verbose: bool, stagenet: bool) -> Resul
     // Machine mode never prompts: `ensure_json_consent` already required
     // --yes when --json, so interactive consent is the only remaining path.
     if !args.yes && !super::ui::confirm("Send now? [y/N] ")? {
-        let _ = std::fs::remove_file(&pending_path);
+        if let Err(e) = std::fs::remove_file(&pending_path) {
+            tracing::debug!(error = %e, "could not remove pending record");
+        }
         super::ui::note("Stopped. No funds spent. Nothing published.");
         if args.json {
             println!(
                 "{}",
                 serde_json::to_string(&serde_json::json!({"ok": false, "cancelled": true}))
-                    .unwrap()
+                    .unwrap_or_else(|_| "{}".into())
             );
         }
         // Nothing sent and no recovery record saved: the caller must not
@@ -570,7 +572,9 @@ pub async fn run_inner(args: &StampArgs, verbose: bool, stagenet: bool) -> Resul
         let h = transaction::relay(&client, &tx_hex).await.map_err(|e| {
             // Nothing was broadcast, so the preview txid in the pending
             // record would poison `finalize` forever. Drop the record.
-            let _ = std::fs::remove_file(&pending_path);
+            if let Err(e) = std::fs::remove_file(&pending_path) {
+            tracing::debug!(error = %e, "could not remove pending record");
+        }
             let msg = e.to_string();
             // Relay commits through the wallet's own daemon link. A stale
             // or unreachable daemon fails the commit even though the
@@ -726,7 +730,9 @@ pub async fn run_inner(args: &StampArgs, verbose: bool, stagenet: bool) -> Resul
         args.out_dir.as_deref(),
     )?;
     if height > 0 {
-        let _ = std::fs::remove_file(&pending_path);
+        if let Err(e) = std::fs::remove_file(&pending_path) {
+            tracing::debug!(error = %e, "could not remove pending record");
+        }
         super::stats::record(&super::stats::HistoryEntry {
             txid: hex::encode(txid_bytes),
             fee: preview.fee,
@@ -761,10 +767,9 @@ pub async fn run_inner(args: &StampArgs, verbose: bool, stagenet: bool) -> Resul
 /// directory walks as a cycle guard: the same physical dir twice means
 /// stop, not loop forever.
 pub(crate) fn canonical_key(p: &Path) -> Result<String> {
-    match p.canonicalize() {
-        Ok(c) => Ok(c.to_string_lossy().into_owned()),
-        Err(_) => Ok(p.to_string_lossy().into_owned()),
-    }
+    p.canonicalize()
+        .map(|c| c.to_string_lossy().into_owned())
+        .map_err(|e| anyhow::anyhow!("cannot canonicalize {}: {e}", p.display()))
 }
 
 /// Expand stamp inputs: plain files pass through, directories expand to

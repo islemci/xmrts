@@ -89,3 +89,5 @@ nav:
     - CI Action: ci.md
     - Trust model: trust.md
     - FAQ: faq.md
+  - Troubleshooting: troubleshooting.md
+  - Security model: security.md

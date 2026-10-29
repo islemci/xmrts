@@ -1,6 +1,6 @@
 [package]
 name = "xmrts"
-version = "0.3.4"
+version = "0.3.5"
 edition = "2021"
 description = "Decentralized file timestamping tool built on Monero"
 license = "MIT"
@@ -23,6 +23,9 @@ hex = "0.4"
 # MD5 only for monero-wallet-rpc Digest auth negotiation (RFC 2617
 # challenge may offer MD5); never used on file or proof data.
 md5 = "0.7"
+# `number_prefix` is unmaintained (RUSTSEC-2025-0119) but arrives only
+# transitively via `indicatif`; no direct use. Track upstream fix; revisit
+# on the next indicatif bump (dated 2026-10-29).
 reqwest = { version = "0.12", features = ["json", "rustls-tls"] }
 tokio = { version = "1", features = ["full"] }
 thiserror = "2"

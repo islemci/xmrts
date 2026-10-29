@@ -99,7 +99,7 @@ pub fn run(args: &StatsArgs) -> Result<()> {
     let mut oldest_age: Option<u64> = None;
     for p in &pendings {
         if let Ok(op) = super::pending::load(p) {
-            pending_fees += op.fee;
+            pending_fees = pending_fees.saturating_add(op.fee);
         }
         if let Ok(md) = std::fs::metadata(p) {
             if let Ok(t) = md.modified() {
@@ -192,7 +192,7 @@ mod tests {
             network: "mainnet".to_string(),
             time_unix: 1_760_000_000,
         };
-        let line = serde_json::to_string(&e).unwrap();
+        let line = serde_json::to_string(&e).unwrap_or_else(|_| "{}".into());
         assert_eq!(serde_json::from_str::<HistoryEntry>(&line).unwrap(), e);
     }
 }

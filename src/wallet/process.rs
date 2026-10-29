@@ -79,18 +79,34 @@ pub fn candidate_binaries() -> Vec<PathBuf> {
     out
 }
 
+/// True when `path` is an executable file (on Unix: file with any exec
+/// bit set; elsewhere: any regular file).
+#[cfg(unix)]
+fn is_executable(path: &std::path::Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    path.is_file()
+        && std::fs::metadata(path)
+            .map(|m| m.permissions().mode() & 0o111 != 0)
+            .unwrap_or(false)
+}
+
+#[cfg(not(unix))]
+fn is_executable(path: &std::path::Path) -> bool {
+    path.is_file()
+}
+
 /// Resolve `monero-wallet-rpc` to an executable path: explicit config
 /// first, then [`candidate_binaries`].
 pub fn find_binary(explicit: Option<&str>) -> Result<PathBuf, ProcessError> {
     if let Some(p) = explicit {
         let path = PathBuf::from(p);
-        if path.is_file() {
+        if is_executable(&path) {
             return Ok(path);
         }
         return Err(ProcessError::BinaryNotFound(p.to_string()));
     }
     for cand in candidate_binaries() {
-        if cand.components().count() > 1 && cand.is_file() {
+        if cand.components().count() > 1 && is_executable(&cand) {
             return Ok(cand);
         }
         if cand.components().count() == 1 {
@@ -109,13 +125,13 @@ fn find_on_path(name: &Path) -> Option<PathBuf> {
     let file = name.to_str()?;
     for dir in std::env::split_paths(&std::env::var_os("PATH")?) {
         let p = dir.join(file);
-        if p.is_file() {
+        if is_executable(&p) {
             return Some(p);
         }
         #[cfg(windows)]
         {
             let exe = dir.join(format!("{file}.exe"));
-            if exe.is_file() {
+            if is_executable(&exe) {
                 return Some(exe);
             }
         }
@@ -294,14 +310,23 @@ impl SidecarConfig {
 
     /// Display argv with the config-file path shown but no secret.
     /// The login lives only inside the 0600 file, never in argv, so there
-    /// is nothing to redact; keep the `<hidden>` marker for the file arg
-    /// so logs do not even leak the path layout.
+    /// is nothing to redact there; keep the `<hidden>` marker for the
+    /// file arg so logs do not even leak the path layout.
+    ///
+    /// The daemon address is passed through [`display_url`]: endpoints
+    /// may carry embedded `user:pass@` credentials (saved config, pasted
+    /// `--daemon` values), and this display vector is what `ps`-facing
+    /// logs, `status`, and error text echo. Clean URLs come back
+    /// unchanged, so a plain address stays readable.
     pub fn redacted_args(&self) -> Vec<String> {
         self.spawn_args()
             .into_iter()
             .map(|a| {
                 if a.starts_with("--config-file=") {
                     "--config-file=<hidden>".to_string()
+                } else if a.starts_with("--daemon-address=") {
+                    let addr = a.trim_start_matches("--daemon-address=");
+                    format!("--daemon-address={}", super::connection::display_url(addr))
                 } else {
                     a
                 }
@@ -402,16 +427,27 @@ pub async fn status(cfg: &WalletConfig, client: &super::rpc::WalletRpc) -> Sidec
     };
     let Some(pid) = read_pid() else {
         // No pidfile, but something foreign may still hold the port.
-        if let Some(foreign) = find_listener_pid(sidecar.bind_port) {
+        let port = sidecar.bind_port;
+        if let Some(foreign) = tokio::task::spawn_blocking(move || find_listener_pid(port))
+            .await
+            .unwrap_or(None)
+        {
             return SidecarStatus::Unhealthy(foreign);
         }
         return SidecarStatus::Stopped;
     };
-    match process_cmdline(pid) {
+    let cmd = tokio::task::spawn_blocking(move || process_cmdline(pid))
+        .await
+        .unwrap_or(None);
+    match cmd {
         Some(cmd) if cmdline_matches(&cmd, sidecar.bind_port) => {}
         // Stale pidfile. Check for a foreign holder before saying stopped.
         _ => {
-            if let Some(foreign) = find_listener_pid(sidecar.bind_port) {
+            let port = sidecar.bind_port;
+            if let Some(foreign) = tokio::task::spawn_blocking(move || find_listener_pid(port))
+                .await
+                .unwrap_or(None)
+            {
                 return SidecarStatus::Unhealthy(foreign);
             }
             return SidecarStatus::Stopped;
@@ -441,7 +477,9 @@ pub async fn start(cfg: &mut WalletConfig) -> Result<u32, ProcessError> {
     // Check before touching config. A live holder stays live, so never
     // regen creds or spawn into an occupied port.
     let _ = resolve(cfg)?;
-    let probe = cfg.client();
+    let probe = cfg
+        .client()
+        .map_err(|e| ProcessError::Config(e.to_string()))?;
     match status(cfg, &probe).await {
         SidecarStatus::Running { pid, .. } => return Ok(pid),
         SidecarStatus::Unhealthy(pid) => {
@@ -474,7 +512,9 @@ pub async fn start(cfg: &mut WalletConfig) -> Result<u32, ProcessError> {
         // stderr: keeps `--json` stdout clean.
         eprintln!("Made fresh RPC login for the sidecar. Saved locally.");
     }
-    let client = cfg.client();
+    let client = cfg
+        .client()
+        .map_err(|e| ProcessError::Config(e.to_string()))?;
     let sidecar = resolve(cfg)?;
     // Write the 0600 login conf BEFORE spawn so `--config-file` points at
     // a live file. The password never touches argv.
@@ -497,10 +537,14 @@ pub async fn start(cfg: &mut WalletConfig) -> Result<u32, ProcessError> {
     }
     let child = cmd.spawn()?;
     let pid = child.id();
-    // Intentionally do not wait: the sidecar outlives xmrts. (Unix note:
-    // it shares xmrts's session, so closing the terminal may stop it;
+    // Detach: the sidecar must outlive xmrts. std::process::Child's
+    // Drop does not kill the child unless kill_on_drop(true) was set
+    // (it is not), so a plain drop closes the stdio pipes without
+    // terminating the process. std::mem::forget is unnecessary and
+    // obscures ownership; drop explicitly. (Unix note: it shares
+    // xmrts's session, so closing the terminal may still stop it;
     // run under tmux/a service for permanence.)
-    std::mem::forget(child);
+    drop(child);
     if let Some(pf) = SidecarConfig::pidfile() {
         std::fs::write(pf, pid.to_string())?;
     }
@@ -661,12 +705,67 @@ mod tests {
         // A credential-bearing endpoint with a bad port must error, and
         // the error text must redact the userinfo like every other branch.
         let err = parse_endpoint("http://stamp:topsecretpw@127.0.0.1:notaport")
-            .err()
-            .expect("bad port must fail");
+            .expect_err("bad port must fail");
         let text = err.to_string();
         assert!(!text.contains("topsecretpw"));
         assert!(!text.contains("stamp:"));
         assert!(text.contains('<'), "endpoint should be redacted: {text}");
+    }
+
+    #[test]
+    fn daemon_address_credentials_redacted_in_display_argv() {
+        // A daemon endpoint with embedded credentials must never reach
+        // the display path (logs, status, errors): redact like every
+        // other credential-bearer. A clean address stays readable.
+        let sc = SidecarConfig {
+            binary: PathBuf::from("/x/monero-wallet-rpc"),
+            wallet_dir: "/w".to_string(),
+            bind_port: 18082,
+            daemon_address: Some("node:hunter2@example.com:18081".to_string()),
+            username: None,
+            password: None,
+            network_flag: None,
+        };
+        let shown = sc.redacted_args().join(" ");
+        assert!(
+            !shown.contains("hunter2"),
+            "display argv leaked creds: {shown}"
+        );
+        assert!(
+            !shown.contains("node:"),
+            "display argv leaked user: {shown}"
+        );
+        assert!(
+            shown.contains("example.com:18081"),
+            "host must stay identifiable: {shown}"
+        );
+        // The spawned argv is unchanged: the sidecar still needs the
+        // real address to do its job.
+        let real = sc.spawn_args().join(" ");
+        assert!(real.contains("node:hunter2@example.com:18081"));
+        // A clean daemon address passes through untouched.
+        let clean = SidecarConfig {
+            daemon_address: Some("http://127.0.0.1:18081".to_string()),
+            ..sc
+        };
+        let shown = clean.redacted_args().join(" ");
+        assert!(shown.contains("http://127.0.0.1:18081"));
+    }
+
+    #[test]
+    fn non_executable_candidate_is_rejected() {
+        // A regular (non-executable) file must not be picked up as the
+        // sidecar, even when pointed at explicitly; the spawn would only
+        // fail later with a confusing error.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("monero-wallet-rpc");
+            std::fs::write(&path, b"not really a binary").unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+            assert!(find_binary(Some(path.to_str().unwrap())).is_err());
+        }
     }
 
     #[test]
@@ -679,9 +778,8 @@ mod tests {
             username: Some("u".to_string()),
             password: Some("SUPERSECRET".to_string()),
             network_flag: None,
-        };
-        // Neither real nor display argv may contain the secret: it lives
-        // only in the 0600 config file passed via --config-file.
+        }; // Neither real nor display argv may contain the secret: it lives
+           // only in the 0600 config file passed via --config-file.
         let real = sc.spawn_args().join(" ");
         assert!(!real.contains("SUPERSECRET"));
         assert!(!real.contains("--rpc-login="));

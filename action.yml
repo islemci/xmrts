@@ -124,9 +124,10 @@ runs:
             echo "::error::wallet-username needs wallet-password too" >&2
             exit 1
           fi
-          # Password via env is still visible in ps while connect runs;
-          # prefer IP-allowlisted wallets without login when possible.
-          xmrts connect --username "$XMTS_RPC_USER" --password "$XMTS_RPC_PASS" --save-auth
+          # Pipe the secret so it never lands on argv. The env var is
+          # still in this step's environment; prefer IP-allowlisted
+          # wallets without login when possible.
+          printf '%s' "$XMTS_RPC_PASS" | xmrts connect --username "$XMTS_RPC_USER" --password-stdin --save-auth
         fi
         args=(--json --yes)
         if [ "$XMTS_NO_WAIT" = "true" ]; then args+=(--no-wait); fi

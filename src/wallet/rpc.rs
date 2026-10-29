@@ -601,6 +601,7 @@ mod tests {
                 challenge,
                 username,
                 // codeql[rust/hardcoded-credentials]: test fixture, not a real secret
+                // lgtm[rust/hardcoded-credentials]
                 "p",
                 "abc",
                 None,

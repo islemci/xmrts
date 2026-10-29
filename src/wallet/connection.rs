@@ -433,10 +433,42 @@ pub fn load_config() -> WalletConfig {
     let Some(path) = config_file() else {
         return WalletConfig::default();
     };
-    let Ok(text) = std::fs::read_to_string(&path) else {
-        return WalletConfig::default();
+    load_config_from(&path)
+}
+
+/// Read one config file. A missing file is a normal "not configured yet"
+/// state and is silent; a file that exists but cannot be read or parsed
+/// must NOT silently look like a fresh default (a wiped 0600 config
+/// would otherwise reset `network` to mainnet and `stamp` would run on
+/// the wrong chain). Warn, name the file, and fall back to defaults so
+/// the CLI still works; the operator sees why in the log output.
+fn load_config_from(path: &std::path::Path) -> WalletConfig {
+    let text = match std::fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            // Not configured yet: normal state, stay silent.
+            return WalletConfig::default();
+        }
+        Err(e) => {
+            tracing::warn!(
+                file = %path.display(),
+                error = %e,
+                "existing config file is unreadable; using defaults"
+            );
+            return WalletConfig::default();
+        }
     };
-    toml::from_str(&text).unwrap_or_default()
+    match toml::from_str(&text) {
+        Ok(cfg) => cfg,
+        Err(e) => {
+            tracing::warn!(
+                file = %path.display(),
+                error = %e,
+                "config file is not valid TOML; using defaults"
+            );
+            WalletConfig::default()
+        }
+    }
 }
 
 pub fn save_config(cfg: &WalletConfig) -> Result<PathBuf, ConnectionError> {
@@ -455,6 +487,108 @@ pub fn save_config(cfg: &WalletConfig) -> Result<PathBuf, ConnectionError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Arc, Mutex};
+
+    /// Buffer collecting everything tracing writes during a capture run.
+    #[derive(Clone)]
+    struct Capture(Arc<Mutex<Vec<u8>>>);
+    impl tracing_subscriber::fmt::MakeWriter<'_> for Capture {
+        type Writer = CaptureWriter;
+        fn make_writer(&self) -> CaptureWriter {
+            CaptureWriter(self.0.clone())
+        }
+    }
+    struct CaptureWriter(Arc<Mutex<Vec<u8>>>);
+    impl std::io::Write for CaptureWriter {
+        fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(b);
+            Ok(b.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// Run `f` with tracing warnings captured into a string, so tests can
+    /// assert that a warning actually fired and what it said.
+    fn capture_warnings(f: impl FnOnce()) -> String {
+        let inner = Arc::new(Mutex::new(Vec::new()));
+        let subscriber = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::WARN)
+            .with_writer(Capture(inner.clone()))
+            .without_time()
+            .finish();
+        tracing::subscriber::with_default(subscriber, f);
+        let bytes = inner.lock().unwrap().clone();
+        String::from_utf8_lossy(&bytes).into_owned()
+    }
+
+    fn config_identity(cfg: &WalletConfig) -> (String, String) {
+        (cfg.endpoint.clone(), cfg.network.clone())
+    }
+
+    #[test]
+    fn corrupt_config_warns_and_falls_back_to_defaults() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, b"endp[oint = certainly not toml\n").unwrap();
+        let log = capture_warnings(|| {
+            let cfg = load_config_from(&path);
+            assert_eq!(
+                config_identity(&cfg),
+                config_identity(&WalletConfig::default())
+            );
+        });
+        assert!(log.contains("not valid TOML"), "log was: {log}");
+        assert!(log.contains("config.toml"), "log must name the file: {log}");
+    }
+
+    #[test]
+    fn missing_config_is_still_silent() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("does-not-exist.toml");
+        let log = capture_warnings(|| {
+            let cfg = load_config_from(&path);
+            assert_eq!(
+                config_identity(&cfg),
+                config_identity(&WalletConfig::default())
+            );
+        });
+        assert!(log.is_empty(), "a missing config must not warn: {log}");
+    }
+
+    #[test]
+    fn unreadable_config_warns_and_defaults() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, b"endpoint = \"http://127.0.0.1:18082\"\n").unwrap();
+        // Strip every permission bit to force a read failure on Unix.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000)).unwrap();
+        }
+        let log = capture_warnings(|| {
+            let cfg = load_config_from(&path);
+            assert_eq!(
+                config_identity(&cfg),
+                config_identity(&WalletConfig::default())
+            );
+        });
+        assert!(log.contains("unreadable"), "log was: {log}");
+    }
+
+    #[test]
+    fn valid_config_loads_without_warning() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, b"endpoint = \"http://127.0.0.1:18082\"\n").unwrap();
+        let log = capture_warnings(|| {
+            let cfg = load_config_from(&path);
+            assert_eq!(cfg.endpoint, "http://127.0.0.1:18082");
+        });
+        assert!(log.is_empty(), "a valid config must not warn: {log}");
+    }
 
     #[test]
     fn loopback_detection_is_exact() {

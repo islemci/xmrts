@@ -192,7 +192,7 @@ mod tests {
             network: "mainnet".to_string(),
             time_unix: 1_760_000_000,
         };
-        let line = serde_json::to_string(&e).unwrap();
+        let line = serde_json::to_string(&e).unwrap_or_else(|_| "{}".into());
         assert_eq!(serde_json::from_str::<HistoryEntry>(&line).unwrap(), e);
     }
 }

@@ -555,7 +555,7 @@ pub async fn run_inner(args: &StampArgs, verbose: bool, stagenet: bool) -> Resul
             println!(
                 "{}",
                 serde_json::to_string(&serde_json::json!({"ok": false, "cancelled": true}))
-                    .unwrap()
+                    .unwrap_or_else(|_| "{}".into())
             );
         }
         // Nothing sent and no recovery record saved: the caller must not

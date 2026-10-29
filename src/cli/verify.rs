@@ -520,7 +520,10 @@ fn check_daemons_distinct(daemons: &[String]) -> anyhow::Result<()> {
 }
 
 fn print_json(v: &serde_json::Value) {
-    println!("{}", serde_json::to_string(v).unwrap());
+    println!(
+        "{}",
+        serde_json::to_string(v).unwrap_or_else(|_| "{}".into())
+    );
 }
 
 fn fail_exit_json(json: bool, err: &str) -> ! {

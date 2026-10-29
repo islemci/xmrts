@@ -218,7 +218,7 @@ fn run_add(files: &[PathBuf], json: bool) -> Result<()> {
             serde_json::to_string(&serde_json::json!({
                 "ok": true, "added": added, "queued": entries.len(),
             }))
-            .unwrap()
+            .unwrap_or_else(|_| "{}".into())
         );
     }
     Ok(())
@@ -234,7 +234,8 @@ fn run_list(json: bool) -> Result<()> {
         if json {
             println!(
                 "{}",
-                serde_json::to_string(&serde_json::json!({"ok": true, "queued": []})).unwrap()
+                serde_json::to_string(&serde_json::json!({"ok": true, "queued": []}))
+                    .unwrap_or_else(|_| "{}".into())
             );
         }
         return Ok(());
@@ -242,7 +243,8 @@ fn run_list(json: bool) -> Result<()> {
     if json {
         println!(
             "{}",
-            serde_json::to_string(&serde_json::json!({"ok": true, "queued": entries})).unwrap()
+            serde_json::to_string(&serde_json::json!({"ok": true, "queued": entries}))
+                .unwrap_or_else(|_| "{}".into())
         );
         return Ok(());
     }
@@ -367,7 +369,7 @@ mod tests {
         let qf = QueueFile {
             entries: vec![e.clone()],
         };
-        let text = serde_json::to_string(&qf).unwrap();
+        let text = serde_json::to_string(&qf).unwrap_or_else(|_| "{}".into());
         let back: QueueFile = serde_json::from_str(&text).unwrap();
         assert_eq!(back.entries, vec![e]);
         // Old queue files without new fields still parse.

@@ -212,7 +212,8 @@ fn run_list(json: bool) -> Result<()> {
         if json {
             println!(
                 "{}",
-                serde_json::to_string(&serde_json::json!({"ok": true, "pending": []})).unwrap()
+                serde_json::to_string(&serde_json::json!({"ok": true, "pending": []}))
+                    .unwrap_or_else(|_| "{}".into())
             );
         }
         return Ok(());
@@ -253,7 +254,8 @@ fn run_list(json: bool) -> Result<()> {
             .collect();
         println!(
             "{}",
-            serde_json::to_string(&serde_json::json!({"ok": true, "pending": items})).unwrap()
+            serde_json::to_string(&serde_json::json!({"ok": true, "pending": items}))
+                .unwrap_or_else(|_| "{}".into())
         );
         return Ok(());
     }
@@ -329,7 +331,8 @@ fn run_clean(yes: bool, json: bool) -> Result<()> {
         if json {
             println!(
                 "{}",
-                serde_json::to_string(&serde_json::json!({"ok": true, "removed": 0})).unwrap()
+                serde_json::to_string(&serde_json::json!({"ok": true, "removed": 0}))
+                    .unwrap_or_else(|_| "{}".into())
             );
         }
         return Ok(());
@@ -360,7 +363,7 @@ fn run_clean(yes: bool, json: bool) -> Result<()> {
             serde_json::to_string(
                 &serde_json::json!({"ok": removed == dead.len(), "removed": removed})
             )
-            .unwrap()
+            .unwrap_or_else(|_| "{}".into())
         );
     }
     Ok(())
@@ -406,7 +409,11 @@ mod tests {
             merkle_ver: 2,
             relayed,
         };
-        std::fs::write(&path, serde_json::to_string_pretty(&op).unwrap()).unwrap();
+        std::fs::write(
+            &path,
+            serde_json::to_string_pretty(&op).unwrap_or_else(|_| "{}".into()),
+        )
+        .unwrap();
         (dir, path)
     }
 

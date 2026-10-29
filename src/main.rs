@@ -39,7 +39,8 @@ async fn main() -> Result<()> {
         if xmrts::cli::ui::is_quiet() {
             println!(
                 "{}",
-                serde_json::to_string(&serde_json::json!({"ok": false, "error": msg})).unwrap()
+                serde_json::to_string(&serde_json::json!({"ok": false, "error": msg}))
+                    .unwrap_or_else(|_| "{}".into())
             );
         }
         std::process::exit(1);

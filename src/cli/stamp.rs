@@ -761,10 +761,9 @@ pub async fn run_inner(args: &StampArgs, verbose: bool, stagenet: bool) -> Resul
 /// directory walks as a cycle guard: the same physical dir twice means
 /// stop, not loop forever.
 pub(crate) fn canonical_key(p: &Path) -> Result<String> {
-    match p.canonicalize() {
-        Ok(c) => Ok(c.to_string_lossy().into_owned()),
-        Err(_) => Ok(p.to_string_lossy().into_owned()),
-    }
+    p.canonicalize()
+        .map(|c| c.to_string_lossy().into_owned())
+        .map_err(|e| anyhow::anyhow!("cannot canonicalize {}: {e}", p.display()))
 }
 
 /// Expand stamp inputs: plain files pass through, directories expand to

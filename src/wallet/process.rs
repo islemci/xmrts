@@ -294,14 +294,23 @@ impl SidecarConfig {
 
     /// Display argv with the config-file path shown but no secret.
     /// The login lives only inside the 0600 file, never in argv, so there
-    /// is nothing to redact; keep the `<hidden>` marker for the file arg
-    /// so logs do not even leak the path layout.
+    /// is nothing to redact there; keep the `<hidden>` marker for the
+    /// file arg so logs do not even leak the path layout.
+    ///
+    /// The daemon address is passed through [`display_url`]: endpoints
+    /// may carry embedded `user:pass@` credentials (saved config, pasted
+    /// `--daemon` values), and this display vector is what `ps`-facing
+    /// logs, `status`, and error text echo. Clean URLs come back
+    /// unchanged, so a plain address stays readable.
     pub fn redacted_args(&self) -> Vec<String> {
         self.spawn_args()
             .into_iter()
             .map(|a| {
                 if a.starts_with("--config-file=") {
                     "--config-file=<hidden>".to_string()
+                } else if a.starts_with("--daemon-address=") {
+                    let addr = a.trim_start_matches("--daemon-address=");
+                    format!("--daemon-address={}", super::connection::display_url(addr))
                 } else {
                     a
                 }
@@ -669,6 +678,46 @@ mod tests {
     }
 
     #[test]
+    fn daemon_address_credentials_redacted_in_display_argv() {
+        // A daemon endpoint with embedded credentials must never reach
+        // the display path (logs, status, errors): redact like every
+        // other credential-bearer. A clean address stays readable.
+        let sc = SidecarConfig {
+            binary: PathBuf::from("/x/monero-wallet-rpc"),
+            wallet_dir: "/w".to_string(),
+            bind_port: 18082,
+            daemon_address: Some("node:hunter2@example.com:18081".to_string()),
+            username: None,
+            password: None,
+            network_flag: None,
+        };
+        let shown = sc.redacted_args().join(" ");
+        assert!(
+            !shown.contains("hunter2"),
+            "display argv leaked creds: {shown}"
+        );
+        assert!(
+            !shown.contains("node:"),
+            "display argv leaked user: {shown}"
+        );
+        assert!(
+            shown.contains("example.com:18081"),
+            "host must stay identifiable: {shown}"
+        );
+        // The spawned argv is unchanged: the sidecar still needs the
+        // real address to do its job.
+        let real = sc.spawn_args().join(" ");
+        assert!(real.contains("node:hunter2@example.com:18081"));
+        // A clean daemon address passes through untouched.
+        let clean = SidecarConfig {
+            daemon_address: Some("http://127.0.0.1:18081".to_string()),
+            ..sc
+        };
+        let shown = clean.redacted_args().join(" ");
+        assert!(shown.contains("http://127.0.0.1:18081"));
+    }
+
+    #[test]
     fn password_never_on_argv() {
         let sc = SidecarConfig {
             binary: PathBuf::from("/x/monero-wallet-rpc"),
@@ -678,9 +727,8 @@ mod tests {
             username: Some("u".to_string()),
             password: Some("SUPERSECRET".to_string()),
             network_flag: None,
-        };
-        // Neither real nor display argv may contain the secret: it lives
-        // only in the 0600 config file passed via --config-file.
+        }; // Neither real nor display argv may contain the secret: it lives
+           // only in the 0600 config file passed via --config-file.
         let real = sc.spawn_args().join(" ");
         assert!(!real.contains("SUPERSECRET"));
         assert!(!real.contains("--rpc-login="));

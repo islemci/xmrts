@@ -126,7 +126,28 @@ impl WalletRpc {
                 });
             }
         }
-        let v: Value = resp.json().await.map_err(conn_err)?;
+        // Read the body as text first: `.json()` alone can only say "not
+        // JSON", losing all evidence at exactly the wrong moment. A reverse
+        // proxy error page or a plain web server on the endpoint answers
+        // HTTP with a status + body that identify the real problem; a bare
+        // "connection" error would send the user checking network/wallet
+        // state for a configuration issue instead.
+        let status = resp.status();
+        let text = resp.text().await.map_err(conn_err)?;
+        let v: Value = serde_json::from_str(&text).map_err(|e| {
+            let snippet: String = text
+                .trim()
+                .chars()
+                .filter(|c| !c.is_control())
+                .take(200)
+                .collect();
+            RpcError::Connection {
+                endpoint: super::connection::display_url(&self.endpoint),
+                message: format!(
+                    "wallet RPC endpoint answered HTTP {status} with non-JSON data (is this really a monero-wallet-rpc?): {e}; body starts: {snippet:?}"
+                ),
+            }
+        })?;
         if let Some(err) = v.get("error") {
             return Err(RpcError::Server {
                 code: err.get("code").and_then(Value::as_i64).unwrap_or(-1),

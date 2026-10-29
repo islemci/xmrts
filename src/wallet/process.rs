@@ -173,7 +173,7 @@ pub fn parse_endpoint(endpoint: &str) -> Result<(String, u16), ProcessError> {
     let host = host.strip_suffix(']').unwrap_or(host);
     let port: u16 = port
         .parse()
-        .map_err(|_| ProcessError::Config(format!("bad port in '{endpoint}'")))?;
+        .map_err(|_| ProcessError::Config(format!("bad port in '{redacted}'")))?;
     Ok((host.to_string(), port))
 }
 
@@ -654,6 +654,19 @@ mod tests {
         );
         assert!(parse_endpoint("notaurl").is_err());
         assert!(parse_endpoint("http://127.0.0.1").is_err());
+    }
+
+    #[test]
+    fn endpoint_errors_never_echo_credentials() {
+        // A credential-bearing endpoint with a bad port must error, and
+        // the error text must redact the userinfo like every other branch.
+        let err = parse_endpoint("http://stamp:topsecretpw@127.0.0.1:notaport")
+            .err()
+            .expect("bad port must fail");
+        let text = err.to_string();
+        assert!(!text.contains("topsecretpw"));
+        assert!(!text.contains("stamp:"));
+        assert!(text.contains('<'), "endpoint should be redacted: {text}");
     }
 
     #[test]

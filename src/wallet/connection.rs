@@ -122,11 +122,13 @@ impl WalletConfig {
 
     pub fn validate(&self) -> Result<(), ConnectionError> {
         if !(self.endpoint.starts_with("http://") || self.endpoint.starts_with("https://")) {
-            return Err(ConnectionError::BadEndpoint(self.endpoint.clone()));
+            // Error text can end up in terminals/logs; endpoints may carry
+            // embedded credentials (see `parse_endpoint`).
+            return Err(ConnectionError::BadEndpoint(display_url(&self.endpoint)));
         }
         if let Some(d) = &self.daemon_endpoint {
             if !(d.starts_with("http://") || d.starts_with("https://")) {
-                return Err(ConnectionError::BadEndpoint(d.clone()));
+                return Err(ConnectionError::BadEndpoint(display_url(d)));
             }
         }
         if let Some(p) = &self.proxy {
@@ -267,7 +269,25 @@ pub fn display_url(url: &str) -> String {
     let mut i = 0;
     while i < url.len() {
         let Some(offset) = url[i..].find("://") else {
-            out.push_str(&url[i..]);
+            // No scheme at all (common user typo, e.g. pasting a bare
+            // `user:pass@host:port`). The text is still effectively an
+            // authority, so redact userinfo exactly like the scheme case
+            // instead of echoing the tail verbatim.
+            let tail = &url[i..];
+            let authority_end = tail
+                .find(['/', '?', '#', ' ', '&', '=', '+', ',', ';', '(', ')'])
+                .unwrap_or(tail.len());
+            let authority = &tail[..authority_end];
+            match authority.rfind('@') {
+                // Keep the trailing '@' and host tail: the endpoint stays
+                // identifiable, matching the scheme case below.
+                Some(at) => {
+                    out.push_str("<hidden>");
+                    out.push_str(&authority[at..]);
+                }
+                None => out.push_str(authority),
+            }
+            out.push_str(&tail[authority_end..]);
             return out;
         };
         let scheme_end = i + offset + 3;
@@ -521,6 +541,20 @@ mod tests {
     }
 
     #[test]
+    fn endpoint_validation_error_redacts_credentials() {
+        let mut cfg = WalletConfig::default();
+        cfg.endpoint = "stamp:topsecretpw@host:18081".to_string();
+        let err = cfg.validate().err().expect("missing scheme must fail");
+        assert!(!err.to_string().contains("topsecretpw"));
+        assert!(!err.to_string().contains("stamp:"));
+        cfg.endpoint = "http://127.0.0.1:18082".to_string();
+        cfg.daemon_endpoint = Some("node:hunter2@example:18081".to_string());
+        let err = cfg.validate().err().expect("daemon must fail");
+        assert!(!err.to_string().contains("hunter2"));
+        assert!(!err.to_string().contains("node:"));
+    }
+
+    #[test]
     #[cfg(unix)]
     fn atomic_write_is_owner_only() {
         use std::os::unix::fs::PermissionsExt;
@@ -601,8 +635,15 @@ mod tests {
             display_url("http://node.example/x@y"),
             "http://node.example/x@y"
         );
-        // No scheme: pass through as-is (never parsed as a URL here).
+        // No scheme, no userinfo shape: pass through as-is.
         assert_eq!(display_url("127.0.0.1:18082"), "127.0.0.1:18082");
+        // No scheme but credential-shaped (common paste typo): the
+        // bare `user:pass@host` must redact exactly like scheme'd URLs,
+        // because validate()/parse_endpoint errors echo these strings.
+        assert_eq!(
+            display_url("stamp:topsecretpw@host:18081"),
+            "<hidden>@host:18081"
+        );
         // Multi-'@' authority matches the URL parser's split: everything
         // before the last '@' is userinfo, so all of it is hidden while
         // the effective host stays visible for quorum identification.

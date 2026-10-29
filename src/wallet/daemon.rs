@@ -122,7 +122,7 @@ impl DaemonClient {
     /// confirmed transaction.
     pub async fn tx_extra(&self, txid_hex: &str) -> Result<(String, u64, u64), DaemonError> {
         let url = format!("{}/get_transactions", self.endpoint.trim_end_matches('/'));
-        let resp: serde_json::Value = self
+        let resp = self
             .client
             .post(&url)
             .json(&serde_json::json!({"txs_hashes": [txid_hex], "decode_as_json": true}))
@@ -131,10 +131,23 @@ impl DaemonClient {
             .map_err(|e| DaemonError::Unreachable {
                 endpoint: super::connection::display_url(&self.endpoint),
                 message: e.to_string(),
-            })?
-            .json()
-            .await
-            .map_err(|e| DaemonError::Malformed(e.to_string()))?;
+            })?;
+        let status = resp.status();
+        let text = resp.text().await.map_err(|e| DaemonError::Unreachable {
+            endpoint: super::connection::display_url(&self.endpoint),
+            message: e.to_string(),
+        })?;
+        let resp: serde_json::Value = serde_json::from_str(&text).map_err(|e| {
+            let snippet: String = text
+                .trim()
+                .chars()
+                .filter(|c| !c.is_control())
+                .take(200)
+                .collect();
+            DaemonError::Malformed(format!(
+                "daemon endpoint answered HTTP {status} with non-JSON data: {e}; body starts: {snippet:?}"
+            ))
+        })?;
         let tx = resp
             .get("txs")
             .and_then(|t| t.as_array())

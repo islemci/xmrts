@@ -47,6 +47,13 @@ pub fn prepare_self_send(address: String, amount_atomic: u64) -> PreparedTx {
 /// to prove the wallet honored `extra`. Case-insensitive (wallets return
 /// lowercase hex, but be liberal).
 pub fn tx_blob_contains_extra(tx_blob_hex: &str, extra_hex: &str) -> bool {
+    // Fail closed: an empty `extra_hex` would make `contains` vacuously
+    // true for every blob, turning this mark gate into a no-op. Callers
+    // derive the hex from a 32-byte commitment today; future callers
+    // must get the same fail-closed behavior, not a silent pass.
+    if extra_hex.is_empty() {
+        return false;
+    }
     tx_blob_hex
         .to_ascii_lowercase()
         .contains(&extra_hex.to_ascii_lowercase())
@@ -247,6 +254,15 @@ mod tests {
         ));
         assert!(!tx_blob_contains_extra("deadbeefcafef00d", extra));
         assert!(!tx_blob_contains_extra("", extra));
+    }
+
+    #[test]
+    fn blob_check_fails_closed_on_empty_extra() {
+        // `"anything".contains("")` is vacuously true; the gate must
+        // never turn that into a pass.
+        assert!(!tx_blob_contains_extra("deadbeef", ""));
+        assert!(!tx_blob_contains_extra("", ""));
+        assert!(!tx_blob_contains_extra("0228584d525453010102aaaa", ""));
     }
 
     #[test]

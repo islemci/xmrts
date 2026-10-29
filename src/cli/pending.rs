@@ -85,6 +85,26 @@ pub fn load(path: &Path) -> Result<PendingOp> {
     serde_json::from_str(&text).with_context(|| format!("parsing {}", path.display()))
 }
 
+/// First free `<stem>-<n>.json` in `dir` (n from 2). Bounded: a broken or
+/// packed pending directory must not be able to spin this loop forever;
+/// give up with a clear error instead.
+fn next_free_path(dir: &Path, stem: &str) -> Result<PathBuf> {
+    const MAX_SUFFIX: u32 = 1000;
+    let mut n = 2u32;
+    loop {
+        let cand = dir.join(format!("{stem}-{n}.json"));
+        if !cand.exists() {
+            return Ok(cand);
+        }
+        n += 1;
+        if n > MAX_SUFFIX {
+            anyhow::bail!(
+                "could not find a free pending filename for '{stem}' after {MAX_SUFFIX} attempts; is the pending directory healthy?"
+            );
+        }
+    }
+}
+
 pub fn save(op: &PendingOp) -> Result<PathBuf> {
     let Some(dir) = connection::pending_dir() else {
         anyhow::bail!("no config dir");
@@ -104,15 +124,7 @@ pub fn save(op: &PendingOp) -> Result<PathBuf> {
                 .file_stem()
                 .map(|s| s.to_string_lossy().into_owned())
                 .unwrap_or_else(|| "pending".to_string());
-            let mut n = 2u32;
-            loop {
-                let cand = dir.join(format!("{stem}-{n}.json"));
-                if !cand.exists() {
-                    path = cand;
-                    break;
-                }
-                n += 1;
-            }
+            path = next_free_path(&dir, &stem)?;
         }
     }
     // Atomic + owner-only: crash-safe recovery record (M3). Holds tx
@@ -424,5 +436,27 @@ mod tests {
         assert_eq!(v["relayed"], serde_json::Value::Bool(true));
         assert_eq!(v["txid"], "zzz");
         assert_eq!(v["network"], "mainnet");
+    }
+
+    #[test]
+    fn next_free_path_skips_taken_suffixes() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("p-2.json"), b"x").unwrap();
+        std::fs::write(dir.path().join("p-3.json"), b"x").unwrap();
+        let next = next_free_path(dir.path(), "p").unwrap();
+        assert!(next.ends_with("p-4.json"));
+    }
+
+    #[test]
+    fn next_free_path_gives_up_after_the_cap() {
+        let dir = tempfile::tempdir().unwrap();
+        // Seed every suffix up to and past the cap so nothing is free.
+        for n in 2..=1001u32 {
+            std::fs::write(dir.path().join(format!("p-{n}.json")), b"x").unwrap();
+        }
+        let err = next_free_path(dir.path(), "p")
+            .err()
+            .expect("exhausted directory must fail, not spin");
+        assert!(err.to_string().contains("1000"), "unexpected error: {err}");
     }
 }

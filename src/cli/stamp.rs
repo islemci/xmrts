@@ -394,22 +394,42 @@ pub async fn run_inner(args: &StampArgs, verbose: bool, stagenet: bool) -> Resul
             );
         }
     }
-    let (balance, unlocked) = client.get_balance().await.unwrap_or((0, 0));
-    super::ui::field("Network", &network_name);
-    super::ui::field("To (self)", &super::ui::short_address(&address));
-    super::ui::field(
-        "Balance",
-        &format!(
-            "{} ({} unlocked)",
-            transaction::format_xmr(balance),
-            transaction::format_xmr(unlocked)
-        ),
-    );
-    if unlocked == 0 {
-        super::ui::warn(
-            "No unlocked funds. The transfer will fail until outputs unlock (10 blocks).",
-        );
-    }
+    // Surface balance-fetch failures instead of rendering (0, 0): a
+    // transient RPC error must not masquerade as "no unlocked funds",
+    // which would send the user chasing a wallet state that may not be
+    // the problem. `None` means the balance could not be read: the
+    // display says so, the affordability pre-check below is skipped,
+    // and a still-later `transfer` fails with its own clear error if
+    // funds are genuinely missing.
+    let unlocked_funds: Option<u64> = match client.get_balance().await {
+        Ok((balance, unlocked)) => {
+            super::ui::field("Network", &network_name);
+            super::ui::field("To (self)", &super::ui::short_address(&address));
+            super::ui::field(
+                "Balance",
+                &format!(
+                    "{} ({} unlocked)",
+                    transaction::format_xmr(balance),
+                    transaction::format_xmr(unlocked)
+                ),
+            );
+            if unlocked == 0 {
+                super::ui::warn(
+                    "No unlocked funds. The transfer will fail until outputs unlock (10 blocks).",
+                );
+            }
+            Some(unlocked)
+        }
+        Err(e) => {
+            super::ui::field("Network", &network_name);
+            super::ui::field("To (self)", &super::ui::short_address(&address));
+            super::ui::field("Balance", &format!("unavailable ({e})"));
+            super::ui::note(
+                "Could not read the balance from the wallet; continuing without the affordability check. If funds are actually missing, the transfer below will fail with its own error.",
+            );
+            None
+        }
+    };
 
     // Donations ride in the stamp tx as a fee-sized developer output,
     // matched exactly to the fee via a do_not_relay rebuild. The
@@ -468,20 +488,17 @@ pub async fn run_inner(args: &StampArgs, verbose: bool, stagenet: bool) -> Resul
             &super::ui::short_address(transaction::DONATION_ADDRESS),
         );
     }
-    if unlocked
-        < args
-            .amount
-            .saturating_add(preview.fee)
-            .saturating_add(donation)
-    {
+    let needed = args
+        .amount
+        .saturating_add(preview.fee)
+        .saturating_add(donation);
+    // Skipped when the balance could not be read (unlocked_funds is
+    // None): the transfer below fails with its own error instead.
+    if unlocked_funds.is_some_and(|unlocked| unlocked < needed) {
         anyhow::bail!(
             "Not enough unlocked funds: need {} (amount + fee + donation) but only {} is unlocked. Wait for outputs to unlock (10 blocks) or lower --amount.",
-            transaction::format_xmr(
-                args.amount
-                    .saturating_add(preview.fee)
-                    .saturating_add(donation)
-            ),
-            transaction::format_xmr(unlocked)
+            transaction::format_xmr(needed),
+            transaction::format_xmr(unlocked_funds.unwrap_or(0))
         );
     }
     if args.amount > preview.fee.saturating_mul(100).max(1_000_000) {

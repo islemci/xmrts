@@ -16,18 +16,26 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - name: Rust toolchain
-        uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d # stable
+      - name: Rust toolchain (nightly, required by cargo-fuzz)
+        uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d # master
+        with:
+          toolchain: nightly
 
       - name: Install cargo-fuzz
         run: cargo install cargo-fuzz --locked
 
       - name: Fuzz proof_from_bytes
         working-directory: fuzz
-        run: |
-          timeout 300 cargo fuzz run proof_from_bytes -- -max_total_time=240 || true
+        run: cargo +nightly fuzz run proof_from_bytes -- -max_total_time=240
 
       - name: Fuzz commitment_from_bytes
         working-directory: fuzz
-        run: |
-          timeout 300 cargo fuzz run commitment_from_bytes -- -max_total_time=240 || true
+        run: cargo +nightly fuzz run commitment_from_bytes -- -max_total_time=240
+
+      - name: Upload crashing inputs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-artifacts
+          path: fuzz/artifacts
+          if-no-files-found: ignore

@@ -54,7 +54,7 @@ impl WalletRpc {
             match reqwest::Proxy::all(&p) {
                 Ok(proxy) => builder = builder.proxy(proxy),
                 Err(e) => tracing::warn!(
-                    proxy = %p,
+                    proxy = %super::connection::display_url(&p),
                     error = %e,
                     "saved proxy could not be applied to wallet RPC; traffic goes direct"
                 ),

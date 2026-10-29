@@ -193,7 +193,7 @@ pub fn http_client_builder_for(endpoint: Option<&str>) -> reqwest::ClientBuilder
         match reqwest::Proxy::all(&proxy) {
             Ok(p) => b = b.proxy(p),
             Err(e) => tracing::warn!(
-                proxy = %proxy,
+                proxy = %display_url(&proxy),
                 error = %e,
                 "saved proxy could not be applied; traffic will go direct"
             ),

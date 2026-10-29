@@ -189,8 +189,13 @@ pub fn http_client_builder_for(endpoint: Option<&str>) -> reqwest::ClientBuilder
     let mut b = reqwest::Client::builder();
     let cfg = load_config();
     if let Some(proxy) = effective_proxy(endpoint, cfg.proxy.as_deref()) {
-        if let Ok(p) = reqwest::Proxy::all(&proxy) {
-            b = b.proxy(p);
+        match reqwest::Proxy::all(&proxy) {
+            Ok(p) => b = b.proxy(p),
+            Err(e) => tracing::warn!(
+                proxy = %proxy,
+                error = %e,
+                "saved proxy could not be applied; traffic will go direct"
+            ),
         }
     }
     // Daemon, wallet-side HTTP and price clients never follow redirects.
